@@ -30,13 +30,13 @@ bool AudioEngine::start() {
 
     oboe::AudioStreamBuilder builder;
 
-    oboe::Result result = builder
-            .setDirection(oboe::Direction::Output)
-            .setPerformanceMode(oboe::PerformanceMode::LowLatency)
-            .setFormat(oboe::AudioFormat::Float)
-            .setChannelCount(1)
-            .setDataCallback(this)
-            .openStream(outputStream);
+    builder.setDirection(oboe::Direction::Output);
+    builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+    builder.setFormat(oboe::AudioFormat::Float);
+    builder.setChannelCount(1);
+    builder.setDataCallback(this);
+
+    oboe::Result result = builder.openStream(outputStream);
 
     if (result != oboe::Result::OK) {
         LOGI("Failed to open audio stream");
