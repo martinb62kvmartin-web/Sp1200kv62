@@ -3,6 +3,7 @@
 #include <oboe/Oboe.h>
 #include <array>
 #include <atomic>
+#include <memory>
 
 class AudioEngine : public oboe::AudioStreamDataCallback {
 public:
@@ -29,7 +30,7 @@ private:
         double phase = 0.0;
     };
 
-    oboe::ManagedStream outputStream;
+    std::shared_ptr<oboe::AudioStream> outputStream;
     std::array<Voice, kNumPads> voices;
     std::array<double, kNumPads> frequencies{};
     double sampleRate = 48000.0;
