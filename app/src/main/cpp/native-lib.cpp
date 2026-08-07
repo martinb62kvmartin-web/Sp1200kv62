@@ -39,4 +39,12 @@ Java_com_example_sp1200_MainActivity_nativeTriggerPad(JNIEnv*, jobject, jint pad
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeLoadSample(JNIEnv*, jobject, jint padIndex, jint fd) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return engine->loadSample(padIndex, fd) ? JNI_TRUE : JNI_FALSE;
+}
+
 }
