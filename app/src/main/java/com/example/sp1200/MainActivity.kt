@@ -1,5 +1,7 @@
 package com.example.sp1200
-
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancel
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
