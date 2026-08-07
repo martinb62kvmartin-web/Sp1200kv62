@@ -1,7 +1,5 @@
 package com.example.sp1200
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancel
+
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -553,12 +551,13 @@ fun EditorView(
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color(0xFF4FC3F7))
                     .pointerInput(Unit) {
-                        awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false)
-                            onPlayDown()
-                            waitForUpOrCancel()
-                            onPlayUp()
-                        }
+                        detectTapGestures(
+                            onPress = {
+                                onPlayDown()
+                                tryAwaitRelease()
+                                onPlayUp()
+                            }
+                        )
                     },
                 contentAlignment = Alignment.Center
             ) {
