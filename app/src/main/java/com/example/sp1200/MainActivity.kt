@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,7 +20,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,10 +49,15 @@ class MainActivity : ComponentActivity() {
     private external fun nativeStop()
     private external fun nativeRelease()
     private external fun nativeTriggerPad(padIndex: Int)
+    private external fun nativePadRelease(padIndex: Int)
+    private external fun nativeSetGateMode(enabled: Boolean)
+    private external fun nativeSetPitch(semitones: Float)
     private external fun nativeLoadSample(padIndex: Int, fd: Int): Boolean
 
     private var pendingPad by mutableStateOf(-1)
     private var loadedPads by mutableStateOf(setOf<Int>())
+    private var gateMode by mutableStateOf(false)
+    private var pitch by mutableStateOf(0f)
 
     private val pickSample =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -81,14 +89,23 @@ class MainActivity : ComponentActivity() {
                     color = Color(0xFF111111)
                 ) {
                     Sp1200App(
-                        onPadDown = { padIndex ->
-                            nativeTriggerPad(padIndex)
-                        },
-                        onPadLongPress = { padIndex ->
-                            pendingPad = padIndex
+                        onPadDown = { nativeTriggerPad(it) },
+                        onPadUp = { nativePadRelease(it) },
+                        onPadLongPress = { pad ->
+                            pendingPad = pad
                             pickSample.launch(arrayOf("audio/*"))
                         },
-                        loadedPads = loadedPads
+                        loadedPads = loadedPads,
+                        gateMode = gateMode,
+                        onGateModeChange = { enabled ->
+                            gateMode = enabled
+                            nativeSetGateMode(enabled)
+                        },
+                        pitch = pitch,
+                        onPitchChange = { value ->
+                            pitch = value
+                            nativeSetPitch(value)
+                        }
                     )
                 }
             }
@@ -114,8 +131,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun Sp1200App(
     onPadDown: (Int) -> Unit,
+    onPadUp: (Int) -> Unit,
     onPadLongPress: (Int) -> Unit,
-    loadedPads: Set<Int>
+    loadedPads: Set<Int>,
+    gateMode: Boolean,
+    onGateModeChange: (Boolean) -> Unit,
+    pitch: Float,
+    onPitchChange: (Float) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -128,6 +150,30 @@ fun Sp1200App(
             style = MaterialTheme.typography.titleLarge,
             color = Color.White
         )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { onGateModeChange(!gateMode) }) {
+                Text(if (gateMode) "GATE" else "SHOT")
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "PITCH ${pitch.toInt()} st",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = pitch,
+                    onValueChange = onPitchChange,
+                    valueRange = -12f..12f,
+                    steps = 23
+                )
+            }
+        }
 
         Text(
             text = "Tap = play. Long press = load WAV",
@@ -148,6 +194,7 @@ fun Sp1200App(
                     index = index,
                     hasSample = loadedPads.contains(index),
                     onPadDown = onPadDown,
+                    onPadUp = onPadUp,
                     onPadLongPress = onPadLongPress
                 )
             }
@@ -160,6 +207,7 @@ fun Pad(
     index: Int,
     hasSample: Boolean,
     onPadDown: (Int) -> Unit,
+    onPadUp: (Int) -> Unit,
     onPadLongPress: (Int) -> Unit
 ) {
     val color = when (index) {
@@ -184,6 +232,7 @@ fun Pad(
                     onPress = {
                         onPadDown(index)
                         tryAwaitRelease()
+                        onPadUp(index)
                     },
                     onLongPress = {
                         onPadLongPress(index)
