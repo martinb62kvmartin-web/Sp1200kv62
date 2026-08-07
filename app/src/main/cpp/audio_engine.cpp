@@ -44,6 +44,8 @@ bool AudioEngine::start() {
         sampleRate = 48000.0;
     }
 
+    releaseFactor = std::exp(-1.0 / (sampleRate * 0.01));
+
     int32_t burst = outputStream->getFramesPerBurst();
     if (burst > 0) {
         outputStream->setBufferSizeInFrames(burst * 2);
@@ -75,6 +77,24 @@ void AudioEngine::stop() {
         outputStream->close();
         outputStream.reset();
         LOGI("Audio engine stopped");
+    }
+}
+
+void AudioEngine::setGateMode(bool enabled) {
+    gateMode.store(enabled, std::memory_order_relaxed);
+}
+
+void AudioEngine::setPitchSemitones(double semitones) {
+    pitchRate.store(std::pow(2.0, semitones / 12.0), std::memory_order_relaxed);
+}
+
+void AudioEngine::padRelease(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+
+    if (gateMode.load(std::memory_order_relaxed)) {
+        voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
     }
 }
 
@@ -183,6 +203,7 @@ void AudioEngine::triggerPad(int padIndex) {
         voice.nextSample = samples[padIndex];
     }
 
+    voice.gateClosed.store(false, std::memory_order_relaxed);
     voice.type.store(padIndex, std::memory_order_relaxed);
     voice.hasNextSample.store(true, std::memory_order_relaxed);
     voice.resetRequest.store(true, std::memory_order_relaxed);
@@ -195,9 +216,11 @@ double AudioEngine::nextNoise(Voice& v) {
 }
 
 double AudioEngine::renderVoice(Voice& v) {
+    const double rate = pitchRate.load(std::memory_order_relaxed);
+
     if (v.sample && !v.sample->data.empty()) {
         const std::vector<float>& d = v.sample->data;
-        const double step = v.sample->sampleRate / sampleRate;
+        const double step = (v.sample->sampleRate / sampleRate) * rate;
         const size_t i = static_cast<size_t>(v.pos);
 
         if (i + 1 >= d.size()) {
@@ -208,7 +231,7 @@ double AudioEngine::renderVoice(Voice& v) {
         const double frac = v.pos - static_cast<double>(i);
         const double out = d[i] + (d[i + 1] - d[i]) * frac;
         v.pos += step;
-        return out;
+        return out * v.amp;
     }
 
     const double t = static_cast<double>(v.age) / sampleRate;
@@ -216,7 +239,7 @@ double AudioEngine::renderVoice(Voice& v) {
 
     switch (v.type.load(std::memory_order_relaxed)) {
         case 0: {
-            const double f = 40.0 + 120.0 * std::exp(-t * 25.0);
+            const double f = (40.0 + 120.0 * std::exp(-t * 25.0)) * rate;
             v.phase += kTwoPi * f / sampleRate;
             if (v.phase >= kTwoPi) v.phase -= kTwoPi;
             out = std::sin(v.phase);
@@ -224,7 +247,7 @@ double AudioEngine::renderVoice(Voice& v) {
         }
         case 1: {
             const double n = nextNoise(v);
-            v.phase += kTwoPi * 180.0 / sampleRate;
+            v.phase += kTwoPi * 180.0 * rate / sampleRate;
             if (v.phase >= kTwoPi) v.phase -= kTwoPi;
             out = 0.6 * n + 0.5 * std::sin(v.phase);
             break;
@@ -238,14 +261,14 @@ double AudioEngine::renderVoice(Voice& v) {
             break;
         }
         case 4: {
-            const double f = 70.0 + 30.0 * std::exp(-t * 10.0);
+            const double f = (70.0 + 30.0 * std::exp(-t * 10.0)) * rate;
             v.phase += kTwoPi * f / sampleRate;
             if (v.phase >= kTwoPi) v.phase -= kTwoPi;
             out = std::sin(v.phase);
             break;
         }
         case 5: {
-            const double f = 120.0 + 40.0 * std::exp(-t * 10.0);
+            const double f = (120.0 + 40.0 * std::exp(-t * 10.0)) * rate;
             v.phase += kTwoPi * f / sampleRate;
             if (v.phase >= kTwoPi) v.phase -= kTwoPi;
             out = std::sin(v.phase);
@@ -257,9 +280,9 @@ double AudioEngine::renderVoice(Voice& v) {
             break;
         }
         case 7: {
-            v.phase += kTwoPi * 540.0 / sampleRate;
+            v.phase += kTwoPi * 540.0 * rate / sampleRate;
             if (v.phase >= kTwoPi) v.phase -= kTwoPi;
-            v.phase2 += kTwoPi * 800.0 / sampleRate;
+            v.phase2 += kTwoPi * 800.0 * rate / sampleRate;
             if (v.phase2 >= kTwoPi) v.phase2 -= kTwoPi;
             const double s1 = (v.phase < kPi) ? 0.5 : -0.5;
             const double s2 = (v.phase2 < kPi) ? 0.4 : -0.4;
@@ -272,7 +295,6 @@ double AudioEngine::renderVoice(Voice& v) {
     }
 
     v.age++;
-    v.amp *= v.decay;
 
     return out * v.amp;
 }
@@ -334,6 +356,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             }
 
             mix += static_cast<float>(renderVoice(v));
+
+            if (v.gateClosed.load(std::memory_order_relaxed)) {
+                v.amp *= releaseFactor;
+            } else if (!v.sample || v.sample->data.empty()) {
+                v.amp *= v.decay;
+            }
         }
 
         if (mix > 1.0f) {
