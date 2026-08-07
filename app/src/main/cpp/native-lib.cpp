@@ -39,6 +39,27 @@ Java_com_example_sp1200_MainActivity_nativeTriggerPad(JNIEnv*, jobject, jint pad
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativePadRelease(JNIEnv*, jobject, jint padIndex) {
+    if (engine != nullptr) {
+        engine->padRelease(padIndex);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetGateMode(JNIEnv*, jobject, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setGateMode(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPitch(JNIEnv*, jobject, jfloat semitones) {
+    if (engine != nullptr) {
+        engine->setPitchSemitones(static_cast<double>(semitones));
+    }
+}
+
 JNIEXPORT jboolean JNICALL
 Java_com_example_sp1200_MainActivity_nativeLoadSample(JNIEnv*, jobject, jint padIndex, jint fd) {
     if (engine == nullptr) {
