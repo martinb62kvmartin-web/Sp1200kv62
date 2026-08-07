@@ -98,6 +98,63 @@ void AudioEngine::padRelease(int padIndex) {
     }
 }
 
+void AudioEngine::setSeqPlaying(bool playing) {
+    seqPlaying.store(playing, std::memory_order_relaxed);
+    if (playing) {
+        seqRestart.store(true, std::memory_order_relaxed);
+    }
+}
+
+void AudioEngine::setSeqBpm(double bpm) {
+    if (bpm < 30.0) bpm = 30.0;
+    if (bpm > 300.0) bpm = 300.0;
+    seqBpm.store(bpm, std::memory_order_relaxed);
+}
+
+void AudioEngine::setSeqSwing(double swing) {
+    if (swing < 0.0) swing = 0.0;
+    if (swing > 0.5) swing = 0.5;
+    seqSwing.store(swing, std::memory_order_relaxed);
+}
+
+void AudioEngine::setSeqMask(int padIndex, int mask) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+    seqMask[padIndex].store(mask, std::memory_order_relaxed);
+}
+
+void AudioEngine::triggerVoice(int padIndex) {
+    Voice& voice = voices[padIndex];
+
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        voice.nextSample = samples[padIndex];
+    }
+
+    voice.gateClosed.store(false, std::memory_order_relaxed);
+    voice.type.store(padIndex, std::memory_order_relaxed);
+    voice.hasNextSample.store(true, std::memory_order_relaxed);
+    voice.resetRequest.store(true, std::memory_order_relaxed);
+    voice.active.store(true, std::memory_order_relaxed);
+}
+
+void AudioEngine::triggerPad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+    triggerVoice(padIndex);
+}
+
+void AudioEngine::fireStep(int step) {
+    for (int p = 0; p < kNumPads; ++p) {
+        const int m = seqMask[p].load(std::memory_order_relaxed);
+        if ((m & (1 << step)) != 0) {
+            triggerVoice(p);
+        }
+    }
+}
+
 bool AudioEngine::loadSample(int padIndex, int fd) {
     if (padIndex < 0 || padIndex >= kNumPads || fd < 0) {
         return false;
@@ -189,25 +246,6 @@ bool AudioEngine::loadSample(int padIndex, int fd) {
 
     LOGI("Loaded sample for pad %d, frames=%zu", padIndex, sample->data.size());
     return true;
-}
-
-void AudioEngine::triggerPad(int padIndex) {
-    if (padIndex < 0 || padIndex >= kNumPads) {
-        return;
-    }
-
-    Voice& voice = voices[padIndex];
-
-    {
-        std::lock_guard<std::mutex> lock(sampleMutex);
-        voice.nextSample = samples[padIndex];
-    }
-
-    voice.gateClosed.store(false, std::memory_order_relaxed);
-    voice.type.store(padIndex, std::memory_order_relaxed);
-    voice.hasNextSample.store(true, std::memory_order_relaxed);
-    voice.resetRequest.store(true, std::memory_order_relaxed);
-    voice.active.store(true, std::memory_order_relaxed);
 }
 
 double AudioEngine::nextNoise(Voice& v) {
@@ -314,7 +352,42 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         sampleRate = 48000.0;
     }
 
+    const bool seqOn = seqPlaying.load(std::memory_order_relaxed);
+    double fps = 0.0;
+    double swingOff = 0.0;
+
+    if (seqOn) {
+        const double bpm = seqBpm.load(std::memory_order_relaxed);
+        fps = (60.0 / bpm) * sampleRate / 4.0;
+        swingOff = seqSwing.load(std::memory_order_relaxed) * fps;
+    }
+
     for (int32_t frame = 0; frame < numFrames; ++frame) {
+        const double absolute = totalFrames + static_cast<double>(frame);
+
+        if (seqOn) {
+            if (seqRestart.exchange(false, std::memory_order_relaxed)) {
+                nextStepFrame = absolute;
+                seqStep = 0;
+            }
+
+            if (nextStepFrame < absolute - sampleRate) {
+                nextStepFrame = absolute;
+            }
+
+            while (absolute >= nextStepFrame) {
+                fireStep(seqStep);
+
+                const int i = seqStep;
+                const int next = (i + 1) % kSteps;
+                double delta = fps;
+                if (next % 2 == 1) delta += swingOff;
+                if (i % 2 == 1) delta -= swingOff;
+                nextStepFrame += delta;
+                seqStep = next;
+            }
+        }
+
         float mix = 0.0f;
 
         for (auto& v : voices) {
@@ -372,6 +445,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
         output[frame] = mix * 0.8f;
     }
+
+    totalFrames += static_cast<double>(numFrames);
 
     return oboe::DataCallbackResult::Continue;
 }
