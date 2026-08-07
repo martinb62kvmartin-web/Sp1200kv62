@@ -68,4 +68,32 @@ Java_com_example_sp1200_MainActivity_nativeLoadSample(JNIEnv*, jobject, jint pad
     return engine->loadSample(padIndex, fd) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSeqSetPlaying(JNIEnv*, jobject, jboolean playing) {
+    if (engine != nullptr) {
+        engine->setSeqPlaying(playing == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSeqSetBpm(JNIEnv*, jobject, jfloat bpm) {
+    if (engine != nullptr) {
+        engine->setSeqBpm(static_cast<double>(bpm));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSeqSetSwing(JNIEnv*, jobject, jfloat swing) {
+    if (engine != nullptr) {
+        engine->setSeqSwing(static_cast<double>(swing));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSeqSetMask(JNIEnv*, jobject, jint padIndex, jint mask) {
+    if (engine != nullptr) {
+        engine->setSeqMask(padIndex, static_cast<int>(mask));
+    }
+}
+
 }
