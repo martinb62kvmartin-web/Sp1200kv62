@@ -96,4 +96,41 @@ Java_com_example_sp1200_MainActivity_nativeSeqSetMask(JNIEnv*, jobject, jint pad
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetLoopPoints(JNIEnv*, jobject, jint padIndex, jfloat startFrac, jfloat endFrac) {
+    if (engine != nullptr) {
+        engine->setLoopPoints(padIndex, static_cast<double>(startFrac), static_cast<double>(endFrac));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetLoopOn(JNIEnv*, jobject, jint padIndex, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setLoopOn(padIndex, enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeTrimToLoop(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return engine->trimToLoop(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetPeaks(JNIEnv* env, jobject, jint padIndex, jint buckets) {
+    jfloatArray result = env->NewFloatArray(buckets > 0 ? buckets : 1);
+
+    if (engine == nullptr || result == nullptr) {
+        return result;
+    }
+
+    std::vector<float> peaks = engine->getPeaks(padIndex, buckets);
+
+    env->SetFloatArrayRegion(result, 0, static_cast<jsize>(peaks.size()), peaks.data());
+
+    return result;
+}
+
 }
