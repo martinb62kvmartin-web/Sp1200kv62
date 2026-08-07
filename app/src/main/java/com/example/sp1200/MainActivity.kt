@@ -6,6 +6,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -34,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
@@ -59,16 +62,26 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
     private external fun nativeSeqSetMask(padIndex: Int, mask: Int)
+    private external fun nativeSetLoopPoints(padIndex: Int, startFrac: Float, endFrac: Float)
+    private external fun nativeSetLoopOn(padIndex: Int, enabled: Boolean)
+    private external fun nativeTrimToLoop(padIndex: Int): Boolean
+    private external fun nativeGetPeaks(padIndex: Int, buckets: Int): FloatArray
 
     private var pendingPad by mutableStateOf(-1)
     private var loadedPads by mutableStateOf(setOf<Int>())
     private var gateMode by mutableStateOf(false)
     private var pitch by mutableStateOf(0f)
-    private var viewSeq by mutableStateOf(false)
+    private var view by mutableStateOf(0)
     private var playing by mutableStateOf(false)
     private var bpm by mutableStateOf(90f)
     private var swing by mutableStateOf(0f)
     private var pattern by mutableStateOf(List(8) { 0 })
+
+    private var selectedPad by mutableStateOf(0)
+    private var peaks by mutableStateOf(FloatArray(0))
+    private var loopStarts by mutableStateOf(List(8) { 0f })
+    private var loopEnds by mutableStateOf(List(8) { 100f })
+    private var loopOns by mutableStateOf(List(8) { false })
 
     private val pickSample =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -80,6 +93,11 @@ class MainActivity : ComponentActivity() {
                     val ok = nativeLoadSample(pad, pfd.fd)
                     if (ok) {
                         loadedPads = loadedPads + pad
+                        loopStarts = loopStarts.toMutableList().also { it[pad] = 0f }
+                        loopEnds = loopEnds.toMutableList().also { it[pad] = 100f }
+                        if (pad == selectedPad) {
+                            peaks = nativeGetPeaks(pad, 200)
+                        }
                         Toast.makeText(this, "PAD ${pad + 1}: sample loaded", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(this, "Need PCM 16-bit WAV", Toast.LENGTH_SHORT).show()
@@ -117,8 +135,8 @@ class MainActivity : ComponentActivity() {
                             pitch = value
                             nativeSetPitch(value)
                         },
-                        viewSeq = viewSeq,
-                        onViewChange = { viewSeq = it },
+                        view = view,
+                        onViewChange = { view = it },
                         playing = playing,
                         onPlayToggle = {
                             playing = !playing
@@ -139,7 +157,45 @@ class MainActivity : ComponentActivity() {
                             val newMask = pattern[pad] xor (1 shl step)
                             pattern = pattern.toMutableList().also { it[pad] = newMask }
                             nativeSeqSetMask(pad, newMask)
-                        }
+                        },
+                        selectedPad = selectedPad,
+                        onSelectPad = { pad ->
+                            selectedPad = pad
+                            peaks = nativeGetPeaks(pad, 200)
+                        },
+                        peaks = peaks,
+                        loopStart = loopStarts[selectedPad],
+                        loopEnd = loopEnds[selectedPad],
+                        onLoopStart = { value ->
+                            val end = loopEnds[selectedPad]
+                            val clamped = if (value > end - 1f) end - 1f else value
+                            loopStarts = loopStarts.toMutableList().also { it[selectedPad] = clamped }
+                            nativeSetLoopPoints(selectedPad, clamped / 100f, end / 100f)
+                        },
+                        onLoopEnd = { value ->
+                            val start = loopStarts[selectedPad]
+                            val clamped = if (value < start + 1f) start + 1f else value
+                            loopEnds = loopEnds.toMutableList().also { it[selectedPad] = clamped }
+                            nativeSetLoopPoints(selectedPad, start / 100f, clamped / 100f)
+                        },
+                        loopOn = loopOns[selectedPad],
+                        onLoopToggle = {
+                            val newOn = !loopOns[selectedPad]
+                            loopOns = loopOns.toMutableList().also { it[selectedPad] = newOn }
+                            nativeSetLoopOn(selectedPad, newOn)
+                        },
+                        onTrim = {
+                            val ok = nativeTrimToLoop(selectedPad)
+                            if (ok) {
+                                loopStarts = loopStarts.toMutableList().also { it[selectedPad] = 0f }
+                                loopEnds = loopEnds.toMutableList().also { it[selectedPad] = 100f }
+                                nativeSetLoopPoints(selectedPad, 0f, 1f)
+                                peaks = nativeGetPeaks(selectedPad, 200)
+                                Toast.makeText(this, "Trimmed", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onPlayDown = { nativeTriggerPad(selectedPad) },
+                        onPlayUp = { nativePadRelease(selectedPad) }
                     )
                 }
             }
@@ -183,8 +239,8 @@ fun Sp1200App(
     onGateModeChange: (Boolean) -> Unit,
     pitch: Float,
     onPitchChange: (Float) -> Unit,
-    viewSeq: Boolean,
-    onViewChange: (Boolean) -> Unit,
+    view: Int,
+    onViewChange: (Int) -> Unit,
     playing: Boolean,
     onPlayToggle: () -> Unit,
     bpm: Float,
@@ -192,7 +248,19 @@ fun Sp1200App(
     swing: Float,
     onSwingChange: (Float) -> Unit,
     pattern: List<Int>,
-    onToggleStep: (Int, Int) -> Unit
+    onToggleStep: (Int, Int) -> Unit,
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit,
+    peaks: FloatArray,
+    loopStart: Float,
+    loopEnd: Float,
+    onLoopStart: (Float) -> Unit,
+    onLoopEnd: (Float) -> Unit,
+    loopOn: Boolean,
+    onLoopToggle: () -> Unit,
+    onTrim: () -> Unit,
+    onPlayDown: () -> Unit,
+    onPlayUp: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -210,9 +278,9 @@ fun Sp1200App(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = { onViewChange(!viewSeq) }) {
-                Text(if (viewSeq) "PADS" else "SEQ")
-            }
+            Button(onClick = { onViewChange(0) }) { Text("PADS") }
+            Button(onClick = { onViewChange(1) }) { Text("SEQ") }
+            Button(onClick = { onViewChange(2) }) { Text("EDIT") }
             Button(onClick = onPlayToggle) {
                 Text(if (playing) "STOP" else "PLAY")
             }
@@ -240,7 +308,7 @@ fun Sp1200App(
                 )
             }
 
-            if (viewSeq) {
+            if (view == 1) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "BPM ${bpm.toInt()}",
@@ -269,34 +337,52 @@ fun Sp1200App(
             }
         }
 
-        if (viewSeq) {
-            SequencerGrid(
+        when (view) {
+            1 -> SequencerGrid(
                 pattern = pattern,
                 onToggleStep = onToggleStep
             )
-        } else {
-            Text(
-                text = "Tap = play. Long press = load WAV",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF888888)
+
+            2 -> EditorView(
+                selectedPad = selectedPad,
+                onSelectPad = onSelectPad,
+                loadedPads = loadedPads,
+                peaks = peaks,
+                loopStart = loopStart,
+                loopEnd = loopEnd,
+                onLoopStart = onLoopStart,
+                onLoopEnd = onLoopEnd,
+                loopOn = loopOn,
+                onLoopToggle = onLoopToggle,
+                onTrim = onTrim,
+                onPlayDown = onPlayDown,
+                onPlayUp = onPlayUp
             )
 
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(4),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(8) { index ->
-                    Pad(
-                        index = index,
-                        hasSample = loadedPads.contains(index),
-                        onPadDown = onPadDown,
-                        onPadUp = onPadUp,
-                        onPadLongPress = onPadLongPress
-                    )
+            else -> {
+                Text(
+                    text = "Tap = play. Long press = load WAV",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF888888)
+                )
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(4),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(8) { index ->
+                        Pad(
+                            index = index,
+                            hasSample = loadedPads.contains(index),
+                            onPadDown = onPadDown,
+                            onPadUp = onPadUp,
+                            onPadLongPress = onPadLongPress
+                        )
+                    }
                 }
             }
         }
@@ -330,6 +416,156 @@ fun SequencerGrid(
                             .clickable { onToggleStep(pad, step) }
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun EditorView(
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit,
+    loadedPads: Set<Int>,
+    peaks: FloatArray,
+    loopStart: Float,
+    loopEnd: Float,
+    onLoopStart: (Float) -> Unit,
+    onLoopEnd: (Float) -> Unit,
+    loopOn: Boolean,
+    onLoopToggle: () -> Unit,
+    onTrim: () -> Unit,
+    onPlayDown: () -> Unit,
+    onPlayUp: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (pad in 0 until 8) {
+                val bg = when {
+                    pad == selectedPad -> Color.White
+                    loadedPads.contains(pad) -> padColor(pad)
+                    else -> Color(0xFF2A2A2A)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(bg)
+                        .clickable { onSelectPad(pad) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "${pad + 1}",
+                        color = if (pad == selectedPad) Color.Black else Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(120.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF1E1E1E))
+        ) {
+            val w = size.width
+            val h = size.height
+
+            if (peaks.isNotEmpty()) {
+                val lx = loopStart / 100f * w
+                val rx = loopEnd / 100f * w
+
+                drawRect(
+                    color = Color(0x33FFFFFF),
+                    topLeft = Offset(lx, 0f),
+                    size = Size(rx - lx, h)
+                )
+
+                val n = peaks.size
+                val barW = w / n
+
+                for (i in 0 until n) {
+                    val x = (i + 0.5f) * w / n
+                    val p = peaks[i].coerceIn(0f, 1f) * (h / 2f)
+
+                    drawLine(
+                        color = Color(0xFF4FC3F7),
+                        start = Offset(x, h / 2f - p),
+                        end = Offset(x, h / 2f + p),
+                        strokeWidth = barW
+                    )
+                }
+            }
+        }
+
+        Column {
+            Text(
+                text = "LOOP START ${loopStart.toInt()}%",
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = loopStart,
+                onValueChange = onLoopStart,
+                valueRange = 0f..100f
+            )
+        }
+
+        Column {
+            Text(
+                text = "LOOP END ${loopEnd.toInt()}%",
+                color = Color.White,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Slider(
+                value = loopEnd,
+                onValueChange = onLoopEnd,
+                valueRange = 0f..100f
+            )
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = onLoopToggle) {
+                Text(if (loopOn) "LOOP ON" else "LOOP OFF")
+            }
+
+            Button(onClick = onTrim) {
+                Text("TRIM")
+            }
+
+            Box(
+                modifier = Modifier
+                    .height(48.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFF4FC3F7))
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            onPlayDown()
+                            waitForUpOrCancel()
+                            onPlayUp()
+                        }
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "PLAY (hold)",
+                    color = Color.Black,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
             }
         }
     }
