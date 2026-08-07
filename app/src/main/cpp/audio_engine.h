@@ -31,6 +31,11 @@ public:
     void setSeqSwing(double swing);
     void setSeqMask(int padIndex, int mask);
 
+    void setLoopPoints(int padIndex, double startFrac, double endFrac);
+    void setLoopOn(int padIndex, bool enabled);
+    bool trimToLoop(int padIndex);
+    std::vector<float> getPeaks(int padIndex, int buckets);
+
     oboe::DataCallbackResult onAudioReady(
             oboe::AudioStream* stream,
             void* audioData,
@@ -51,6 +56,11 @@ private:
         std::shared_ptr<const Sample> sample;
         std::shared_ptr<const Sample> nextSample;
         double pos = 0.0;
+
+        int padIndex = 0;
+        bool loopEnabled = false;
+        double loopStart = 0.0;
+        double loopEnd = 0.0;
 
         double amp = 0.0;
         double decay = 0.9999;
@@ -81,6 +91,10 @@ private:
     double totalFrames = 0.0;
     double nextStepFrame = 0.0;
     int seqStep = 0;
+
+    std::array<std::atomic<double>, kNumPads> loopStartFrac{};
+    std::array<std::atomic<double>, kNumPads> loopEndFrac{};
+    std::array<std::atomic<bool>, kNumPads> loopOn{};
 
     double sampleRate = 48000.0;
     double releaseFactor = 0.999;
