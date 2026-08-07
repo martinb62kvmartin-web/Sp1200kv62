@@ -11,9 +11,19 @@
 namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 2.0 * kPi;
+
+double clampd(double v, double lo, double hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
 }
 
-AudioEngine::AudioEngine() = default;
+AudioEngine::AudioEngine() {
+    for (auto& f : loopStartFrac) f.store(0.0);
+    for (auto& f : loopEndFrac) f.store(1.0);
+    for (auto& f : loopOn) f.store(false);
+}
 
 AudioEngine::~AudioEngine() {
     stop();
@@ -93,7 +103,9 @@ void AudioEngine::padRelease(int padIndex) {
         return;
     }
 
-    if (gateMode.load(std::memory_order_relaxed)) {
+    const bool loopHeld = loopOn[padIndex].load(std::memory_order_relaxed);
+
+    if (gateMode.load(std::memory_order_relaxed) || loopHeld) {
         voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
     }
 }
@@ -106,15 +118,11 @@ void AudioEngine::setSeqPlaying(bool playing) {
 }
 
 void AudioEngine::setSeqBpm(double bpm) {
-    if (bpm < 30.0) bpm = 30.0;
-    if (bpm > 300.0) bpm = 300.0;
-    seqBpm.store(bpm, std::memory_order_relaxed);
+    seqBpm.store(clampd(bpm, 30.0, 300.0), std::memory_order_relaxed);
 }
 
 void AudioEngine::setSeqSwing(double swing) {
-    if (swing < 0.0) swing = 0.0;
-    if (swing > 0.5) swing = 0.5;
-    seqSwing.store(swing, std::memory_order_relaxed);
+    seqSwing.store(clampd(swing, 0.0, 0.5), std::memory_order_relaxed);
 }
 
 void AudioEngine::setSeqMask(int padIndex, int mask) {
@@ -122,6 +130,111 @@ void AudioEngine::setSeqMask(int padIndex, int mask) {
         return;
     }
     seqMask[padIndex].store(mask, std::memory_order_relaxed);
+}
+
+void AudioEngine::setLoopPoints(int padIndex, double startFrac, double endFrac) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+
+    startFrac = clampd(startFrac, 0.0, 1.0);
+    endFrac = clampd(endFrac, 0.0, 1.0);
+
+    if (endFrac < startFrac) {
+        const double t = startFrac;
+        startFrac = endFrac;
+        endFrac = t;
+    }
+
+    loopStartFrac[padIndex].store(startFrac, std::memory_order_relaxed);
+    loopEndFrac[padIndex].store(endFrac, std::memory_order_relaxed);
+}
+
+void AudioEngine::setLoopOn(int padIndex, bool enabled) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+    loopOn[padIndex].store(enabled, std::memory_order_relaxed);
+}
+
+bool AudioEngine::trimToLoop(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(sampleMutex);
+
+    auto src = samples[padIndex];
+    if (!src || src->data.empty()) {
+        return false;
+    }
+
+    const double s = loopStartFrac[padIndex].load(std::memory_order_relaxed);
+    const double e = loopEndFrac[padIndex].load(std::memory_order_relaxed);
+
+    if (e <= s) {
+        return false;
+    }
+
+    const size_t n = src->data.size();
+    size_t i0 = static_cast<size_t>(s * static_cast<double>(n));
+    size_t i1 = static_cast<size_t>(e * static_cast<double>(n));
+
+    if (i0 >= n) i0 = n - 1;
+    if (i1 > n) i1 = n;
+    if (i1 <= i0) i1 = i0 + 1;
+
+    auto dst = std::make_shared<Sample>();
+    dst->sampleRate = src->sampleRate;
+    dst->data.assign(src->data.begin() + static_cast<long>(i0),
+                     src->data.begin() + static_cast<long>(i1));
+
+    samples[padIndex] = dst;
+
+    loopStartFrac[padIndex].store(0.0, std::memory_order_relaxed);
+    loopEndFrac[padIndex].store(1.0, std::memory_order_relaxed);
+
+    LOGI("Trimmed pad %d to %zu frames", padIndex, dst->data.size());
+    return true;
+}
+
+std::vector<float> AudioEngine::getPeaks(int padIndex, int buckets) {
+    std::vector<float> out(static_cast<size_t>(buckets > 0 ? buckets : 0), 0.0f);
+
+    if (padIndex < 0 || padIndex >= kNumPads || buckets <= 0) {
+        return out;
+    }
+
+    std::shared_ptr<const Sample> s;
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        s = samples[padIndex];
+    }
+
+    if (!s || s->data.empty()) {
+        return out;
+    }
+
+    const size_t n = s->data.size();
+
+    for (int b = 0; b < buckets; ++b) {
+        size_t i0 = static_cast<size_t>(static_cast<double>(b) * static_cast<double>(n) / buckets);
+        size_t i1 = static_cast<size_t>(static_cast<double>(b + 1) * static_cast<double>(n) / buckets);
+        if (i1 <= i0) i1 = i0 + 1;
+        if (i1 > n) i1 = n;
+
+        const size_t stride = 1 + (i1 - i0) / 64;
+        float m = 0.0f;
+
+        for (size_t i = i0; i < i1; i += stride) {
+            const float a = std::fabs(s->data[i]);
+            if (a > m) m = a;
+        }
+
+        out[static_cast<size_t>(b)] = m;
+    }
+
+    return out;
 }
 
 void AudioEngine::triggerVoice(int padIndex) {
@@ -244,6 +357,9 @@ bool AudioEngine::loadSample(int padIndex, int fd) {
         samples[padIndex] = sample;
     }
 
+    loopStartFrac[padIndex].store(0.0, std::memory_order_relaxed);
+    loopEndFrac[padIndex].store(1.0, std::memory_order_relaxed);
+
     LOGI("Loaded sample for pad %d, frames=%zu", padIndex, sample->data.size());
     return true;
 }
@@ -269,6 +385,11 @@ double AudioEngine::renderVoice(Voice& v) {
         const double frac = v.pos - static_cast<double>(i);
         const double out = d[i] + (d[i + 1] - d[i]) * frac;
         v.pos += step;
+
+        if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos >= v.loopEnd) {
+            v.pos = v.loopStart;
+        }
+
         return out * v.amp;
     }
 
@@ -402,6 +523,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 }
 
                 const int type = v.type.load(std::memory_order_relaxed);
+                v.padIndex = type;
                 v.age = 0;
                 v.phase = 0.0;
                 v.phase2 = 0.0;
@@ -409,6 +531,16 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.amp = 1.0;
                 v.pos = 0.0;
                 v.rng = 123456789u + static_cast<uint32_t>(type) * 999983u;
+
+                if (v.sample && !v.sample->data.empty()) {
+                    const int pad = v.padIndex;
+                    v.loopEnabled = loopOn[pad].load(std::memory_order_relaxed);
+                    const double sz = static_cast<double>(v.sample->data.size());
+                    v.loopStart = loopStartFrac[pad].load(std::memory_order_relaxed) * sz;
+                    v.loopEnd = loopEndFrac[pad].load(std::memory_order_relaxed) * sz;
+                } else {
+                    v.loopEnabled = false;
+                }
 
                 switch (type) {
                     case 0: v.decay = std::exp(-1.0 / (sampleRate * 0.35)); break;
