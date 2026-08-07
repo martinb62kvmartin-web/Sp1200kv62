@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -53,11 +55,20 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetGateMode(enabled: Boolean)
     private external fun nativeSetPitch(semitones: Float)
     private external fun nativeLoadSample(padIndex: Int, fd: Int): Boolean
+    private external fun nativeSeqSetPlaying(playing: Boolean)
+    private external fun nativeSeqSetBpm(bpm: Float)
+    private external fun nativeSeqSetSwing(swing: Float)
+    private external fun nativeSeqSetMask(padIndex: Int, mask: Int)
 
     private var pendingPad by mutableStateOf(-1)
     private var loadedPads by mutableStateOf(setOf<Int>())
     private var gateMode by mutableStateOf(false)
     private var pitch by mutableStateOf(0f)
+    private var viewSeq by mutableStateOf(false)
+    private var playing by mutableStateOf(false)
+    private var bpm by mutableStateOf(90f)
+    private var swing by mutableStateOf(0f)
+    private var pattern by mutableStateOf(List(8) { 0 })
 
     private val pickSample =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -105,6 +116,29 @@ class MainActivity : ComponentActivity() {
                         onPitchChange = { value ->
                             pitch = value
                             nativeSetPitch(value)
+                        },
+                        viewSeq = viewSeq,
+                        onViewChange = { viewSeq = it },
+                        playing = playing,
+                        onPlayToggle = {
+                            playing = !playing
+                            nativeSeqSetPlaying(playing)
+                        },
+                        bpm = bpm,
+                        onBpmChange = { value ->
+                            bpm = value
+                            nativeSeqSetBpm(value)
+                        },
+                        swing = swing,
+                        onSwingChange = { value ->
+                            swing = value
+                            nativeSeqSetSwing(value / 100f)
+                        },
+                        pattern = pattern,
+                        onToggleStep = { pad, step ->
+                            val newMask = pattern[pad] xor (1 shl step)
+                            pattern = pattern.toMutableList().also { it[pad] = newMask }
+                            nativeSeqSetMask(pad, newMask)
                         }
                     )
                 }
@@ -128,6 +162,17 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun padColor(index: Int): Color = when (index) {
+    0 -> Color(0xFFE53935)
+    1 -> Color(0xFFFB8C00)
+    2 -> Color(0xFFFDD835)
+    3 -> Color(0xFF43A047)
+    4 -> Color(0xFF1E88E5)
+    5 -> Color(0xFF8E24AA)
+    6 -> Color(0xFF00ACC1)
+    else -> Color(0xFF546E7A)
+}
+
 @Composable
 fun Sp1200App(
     onPadDown: (Int) -> Unit,
@@ -137,13 +182,23 @@ fun Sp1200App(
     gateMode: Boolean,
     onGateModeChange: (Boolean) -> Unit,
     pitch: Float,
-    onPitchChange: (Float) -> Unit
+    onPitchChange: (Float) -> Unit,
+    viewSeq: Boolean,
+    onViewChange: (Boolean) -> Unit,
+    playing: Boolean,
+    onPlayToggle: () -> Unit,
+    bpm: Float,
+    onBpmChange: (Float) -> Unit,
+    swing: Float,
+    onSwingChange: (Float) -> Unit,
+    pattern: List<Int>,
+    onToggleStep: (Int, Int) -> Unit
 ) {
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Text(
             text = "SP-1200 Clone",
@@ -152,14 +207,25 @@ fun Sp1200App(
         )
 
         Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { onViewChange(!viewSeq) }) {
+                Text(if (viewSeq) "PADS" else "SEQ")
+            }
+            Button(onClick = onPlayToggle) {
+                Text(if (playing) "STOP" else "PLAY")
+            }
+            Button(onClick = { onGateModeChange(!gateMode) }) {
+                Text(if (gateMode) "GATE" else "SHOT")
+            }
+        }
+
+        Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = { onGateModeChange(!gateMode) }) {
-                Text(if (gateMode) "GATE" else "SHOT")
-            }
-
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "PITCH ${pitch.toInt()} st",
@@ -173,30 +239,97 @@ fun Sp1200App(
                     steps = 23
                 )
             }
+
+            if (viewSeq) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "BPM ${bpm.toInt()}",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Slider(
+                        value = bpm,
+                        onValueChange = onBpmChange,
+                        valueRange = 60f..180f
+                    )
+                }
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "SWING ${swing.toInt()}%",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Slider(
+                        value = swing,
+                        onValueChange = onSwingChange,
+                        valueRange = 0f..50f
+                    )
+                }
+            }
         }
 
-        Text(
-            text = "Tap = play. Long press = load WAV",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF888888)
-        )
+        if (viewSeq) {
+            SequencerGrid(
+                pattern = pattern,
+                onToggleStep = onToggleStep
+            )
+        } else {
+            Text(
+                text = "Tap = play. Long press = load WAV",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF888888)
+            )
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            modifier = Modifier
-                .fillMaxSize()
-                .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            items(8) { index ->
-                Pad(
-                    index = index,
-                    hasSample = loadedPads.contains(index),
-                    onPadDown = onPadDown,
-                    onPadUp = onPadUp,
-                    onPadLongPress = onPadLongPress
-                )
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(8) { index ->
+                    Pad(
+                        index = index,
+                        hasSample = loadedPads.contains(index),
+                        onPadDown = onPadDown,
+                        onPadUp = onPadUp,
+                        onPadLongPress = onPadLongPress
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SequencerGrid(
+    pattern: List<Int>,
+    onToggleStep: (Int, Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        for (pad in 0 until 8) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                for (step in 0 until 16) {
+                    val on = (pattern[pad] ushr step) and 1 == 1
+                    val offColor = if (step % 4 == 0) Color(0xFF3A3A3A) else Color(0xFF262626)
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(26.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (on) padColor(pad) else offColor)
+                            .clickable { onToggleStep(pad, step) }
+                    )
+                }
             }
         }
     }
@@ -210,23 +343,12 @@ fun Pad(
     onPadUp: (Int) -> Unit,
     onPadLongPress: (Int) -> Unit
 ) {
-    val color = when (index) {
-        0 -> Color(0xFFE53935)
-        1 -> Color(0xFFFB8C00)
-        2 -> Color(0xFFFDD835)
-        3 -> Color(0xFF43A047)
-        4 -> Color(0xFF1E88E5)
-        5 -> Color(0xFF8E24AA)
-        6 -> Color(0xFF00ACC1)
-        else -> Color(0xFF546E7A)
-    }
-
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(20.dp))
-            .background(color)
+            .background(padColor(index))
             .pointerInput(index) {
                 detectTapGestures(
                     onPress = {
