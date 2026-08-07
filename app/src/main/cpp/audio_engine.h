@@ -26,6 +26,11 @@ public:
     void setPitchSemitones(double semitones);
     bool loadSample(int padIndex, int fd);
 
+    void setSeqPlaying(bool playing);
+    void setSeqBpm(double bpm);
+    void setSeqSwing(double swing);
+    void setSeqMask(int padIndex, int mask);
+
     oboe::DataCallbackResult onAudioReady(
             oboe::AudioStream* stream,
             void* audioData,
@@ -34,6 +39,7 @@ public:
 
 private:
     static constexpr int kNumPads = 8;
+    static constexpr int kSteps = 16;
 
     struct Voice {
         std::atomic<bool> active{false};
@@ -57,6 +63,8 @@ private:
 
     double renderVoice(Voice& voice);
     double nextNoise(Voice& voice);
+    void triggerVoice(int padIndex);
+    void fireStep(int step);
 
     std::shared_ptr<oboe::AudioStream> outputStream;
     std::array<Voice, kNumPads> voices;
@@ -64,6 +72,16 @@ private:
     std::mutex sampleMutex;
     std::atomic<bool> gateMode{false};
     std::atomic<double> pitchRate{1.0};
+
+    std::atomic<bool> seqPlaying{false};
+    std::atomic<bool> seqRestart{false};
+    std::atomic<double> seqBpm{90.0};
+    std::atomic<double> seqSwing{0.0};
+    std::array<std::atomic<int>, kNumPads> seqMask{};
+    double totalFrames = 0.0;
+    double nextStepFrame = 0.0;
+    int seqStep = 0;
+
     double sampleRate = 48000.0;
     double releaseFactor = 0.999;
     bool running = false;
