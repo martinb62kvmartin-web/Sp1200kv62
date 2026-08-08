@@ -1,5 +1,8 @@
 package com.example.sp1200
 
+import android.media.midi.MidiDevice
+import android.media.midi.MidiManager
+import android.media.midi.MidiReceiver
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -19,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -41,6 +45,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 
+private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
+    return this.toMutableList().also { outer ->
+        outer[a] = outer[a].toMutableList().also { inner ->
+            inner[b] = value
+        }
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     companion object {
@@ -57,6 +69,10 @@ class MainActivity : ComponentActivity() {
     private external fun nativePadRelease(padIndex: Int)
     private external fun nativeSetGateMode(enabled: Boolean)
     private external fun nativeSetPitch(semitones: Float)
+    private external fun nativeSetCrunch(enabled: Boolean)
+    private external fun nativeSetBank(bank: Int)
+    private external fun nativeSetMute(padIndex: Int, enabled: Boolean)
+    private external fun nativeSetSolo(padIndex: Int, enabled: Boolean)
     private external fun nativeLoadSample(padIndex: Int, fd: Int): Boolean
     private external fun nativeSeqSetPlaying(playing: Boolean)
     private external fun nativeSeqSetBpm(bpm: Float)
@@ -74,38 +90,168 @@ class MainActivity : ComponentActivity() {
         sustain: Float,
         release: Float
     )
+    private external fun nativeSetMidiMode(mode: Int)
+    private external fun nativeMidiTick()
+    private external fun nativeMidiStart()
+    private external fun nativeMidiStop()
+    private external fun nativeGetMidiTicks(): Long
+
+    private lateinit var midiManager: MidiManager
+    private var midiDevice: MidiDevice? = null
+    private var outPort: MidiDevice.MidiInputPort? = null
+    private var inPort: MidiDevice.MidiOutputPort? = null
+
+    @Volatile
+    private var clockRunning = false
+    private var clockThread: Thread? = null
+    private var lastTicks = 0L
 
     private var pendingPad by mutableStateOf(-1)
-    private var loadedPads by mutableStateOf(setOf<Int>())
+    private var bank by mutableStateOf(0)
+    private var loadedBanks by mutableStateOf(List(4) { setOf<Int>() })
     private var gateMode by mutableStateOf(false)
     private var pitch by mutableStateOf(0f)
+    private var crunch by mutableStateOf(true)
     private var view by mutableStateOf(0)
     private var playing by mutableStateOf(false)
     private var bpm by mutableStateOf(90f)
     private var swing by mutableStateOf(0f)
-    private var pattern by mutableStateOf(List(8) { 0 })
+    private var patternBanks by mutableStateOf(List(4) { List(8) { 0 } })
+    private var mutes by mutableStateOf(List(8) { false })
+    private var solos by mutableStateOf(List(8) { false })
+    private var midiMode by mutableStateOf(0)
+    private var midiDeviceName by mutableStateOf("none")
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
-    private var loopStarts by mutableStateOf(List(8) { 0f })
-    private var loopEnds by mutableStateOf(List(8) { 100f })
-    private var loopOns by mutableStateOf(List(8) { false })
+    private var loopStartBanks by mutableStateOf(List(4) { List(8) { 0f } })
+    private var loopEndBanks by mutableStateOf(List(4) { List(8) { 100f } })
+    private var loopOnBanks by mutableStateOf(List(4) { List(8) { false } })
 
-    private var padPitchList by mutableStateOf(List(8) { 0f })
-    private var padAttackList by mutableStateOf(List(8) { 0f })
-    private var padDecayList by mutableStateOf(List(8) { 0f })
-    private var padSustainList by mutableStateOf(List(8) { 100f })
-    private var padReleaseList by mutableStateOf(List(8) { 50f })
+    private var pitchBanks by mutableStateOf(List(4) { List(8) { 0f } })
+    private var attackBanks by mutableStateOf(List(4) { List(8) { 0f } })
+    private var decayBanks by mutableStateOf(List(4) { List(8) { 0f } })
+    private var sustainBanks by mutableStateOf(List(4) { List(8) { 100f } })
+    private var releaseBanks by mutableStateOf(List(4) { List(8) { 50f } })
 
     private fun pushPadParams(pad: Int) {
         nativeSetPadParams(
             pad,
-            padPitchList[pad],
-            padAttackList[pad] / 1000f,
-            padDecayList[pad] / 1000f,
-            padSustainList[pad] / 100f,
-            padReleaseList[pad] / 1000f
+            pitchBanks[bank][pad],
+            attackBanks[bank][pad] / 1000f,
+            decayBanks[bank][pad] / 1000f,
+            sustainBanks[bank][pad] / 100f,
+            releaseBanks[bank][pad] / 1000f
         )
+    }
+
+    private val midiReceiver = object : MidiReceiver() {
+        override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
+            for (i in offset until offset + count) {
+                when (msg[i].toInt() and 0xFF) {
+                    0xF8 -> nativeMidiTick()
+                    0xFA -> nativeMidiStart()
+                    0xFC -> nativeMidiStop()
+                }
+            }
+        }
+    }
+
+    private fun teardownMidi() {
+        clockRunning = false
+        clockThread = null
+        try {
+            inPort?.close()
+        } catch (_: Exception) {
+        }
+        try {
+            outPort?.close()
+        } catch (_: Exception) {
+        }
+        try {
+            midiDevice?.close()
+        } catch (_: Exception) {
+        }
+        inPort = null
+        outPort = null
+        midiDevice = null
+        midiDeviceName = "none"
+    }
+
+    private fun openMaster() {
+        val info = midiManager.devices.firstOrNull { it.inputPortCount > 0 }
+        if (info == null) {
+            Toast.makeText(this, "No MIDI output device", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        midiManager.openDevice(info, { device ->
+            midiDevice = device
+            outPort = device.openInputPort(0)
+            midiDeviceName = info.properties.getString(MidiManager.PROPERTY_NAME) ?: "midi"
+            startClockThread()
+        }, null)
+    }
+
+    private fun openSlave() {
+        val info = midiManager.devices.firstOrNull { it.outputPortCount > 0 }
+        if (info == null) {
+            Toast.makeText(this, "No MIDI input device", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        midiManager.openDevice(info, { device ->
+            midiDevice = device
+            inPort = device.openOutputPort(0)
+            inPort?.setReceiver(midiReceiver)
+            midiDeviceName = info.properties.getString(MidiManager.PROPERTY_NAME) ?: "midi"
+        }, null)
+    }
+
+    private fun startClockThread() {
+        clockRunning = true
+        lastTicks = 0L
+
+        clockThread = Thread {
+            while (clockRunning) {
+                val cur = nativeGetMidiTicks()
+                val delta = cur - lastTicks
+
+                if (delta > 0) {
+                    val arr = ByteArray(delta.toInt()) { 0xF8.toByte() }
+                    try {
+                        outPort?.send(arr, 0, arr.size, 0)
+                    } catch (_: Exception) {
+                    }
+                    lastTicks = cur
+                }
+
+                try {
+                    Thread.sleep(1)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }.also { it.start() }
+    }
+
+    private fun applyMidiMode(mode: Int) {
+        teardownMidi()
+        nativeSetMidiMode(mode)
+
+        if (mode == 1) {
+            openMaster()
+        } else if (mode == 2) {
+            openSlave()
+        }
+    }
+
+    private fun sendMidiByte(b: Int) {
+        val arr = byteArrayOf(b.toByte())
+        try {
+            outPort?.send(arr, 0, 1, 0)
+        } catch (_: Exception) {
+        }
     }
 
     private val pickSample =
@@ -117,9 +263,9 @@ class MainActivity : ComponentActivity() {
                 contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                     val ok = nativeLoadSample(pad, pfd.fd)
                     if (ok) {
-                        loadedPads = loadedPads + pad
-                        loopStarts = loopStarts.toMutableList().also { it[pad] = 0f }
-                        loopEnds = loopEnds.toMutableList().also { it[pad] = 100f }
+                        loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + pad }
+                        loopStartBanks = loopStartBanks.set2(bank, pad, 0f)
+                        loopEndBanks = loopEndBanks.set2(bank, pad, 100f)
                         if (pad == selectedPad) {
                             peaks = nativeGetPeaks(pad, 200)
                         }
@@ -135,6 +281,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         nativeSetup()
+        midiManager = getSystemService(MIDI_SERVICE) as MidiManager
 
         setContent {
             MaterialTheme {
@@ -149,7 +296,7 @@ class MainActivity : ComponentActivity() {
                             pendingPad = pad
                             pickSample.launch(arrayOf("audio/*"))
                         },
-                        loadedPads = loadedPads,
+                        loadedPads = loadedBanks[bank],
                         gateMode = gateMode,
                         onGateModeChange = { enabled ->
                             gateMode = enabled
@@ -160,12 +307,27 @@ class MainActivity : ComponentActivity() {
                             pitch = value
                             nativeSetPitch(value)
                         },
+                        crunch = crunch,
+                        onCrunchChange = { enabled ->
+                            crunch = enabled
+                            nativeSetCrunch(enabled)
+                        },
+                        bank = bank,
+                        onBankChange = { b ->
+                            bank = b
+                            nativeSetBank(b)
+                            peaks = nativeGetPeaks(selectedPad, 200)
+                        },
                         view = view,
                         onViewChange = { view = it },
                         playing = playing,
                         onPlayToggle = {
                             playing = !playing
                             nativeSeqSetPlaying(playing)
+
+                            if (midiMode == 1) {
+                                sendMidiByte(if (playing) 0xFA else 0xFC)
+                            }
                         },
                         bpm = bpm,
                         onBpmChange = { value ->
@@ -177,11 +339,30 @@ class MainActivity : ComponentActivity() {
                             swing = value
                             nativeSeqSetSwing(value / 100f)
                         },
-                        pattern = pattern,
+                        pattern = patternBanks[bank],
                         onToggleStep = { pad, step ->
-                            val newMask = pattern[pad] xor (1 shl step)
-                            pattern = pattern.toMutableList().also { it[pad] = newMask }
+                            val newMask = patternBanks[bank][pad] xor (1 shl step)
+                            patternBanks = patternBanks.set2(bank, pad, newMask)
                             nativeSeqSetMask(pad, newMask)
+                        },
+                        mutes = mutes,
+                        onMuteToggle = { pad ->
+                            val v = !mutes[pad]
+                            mutes = mutes.toMutableList().also { it[pad] = v }
+                            nativeSetMute(pad, v)
+                        },
+                        solos = solos,
+                        onSoloToggle = { pad ->
+                            val v = !solos[pad]
+                            solos = solos.toMutableList().also { it[pad] = v }
+                            nativeSetSolo(pad, v)
+                        },
+                        midiMode = midiMode,
+                        midiDeviceName = midiDeviceName,
+                        onMidiModeChange = {
+                            val next = (midiMode + 1) % 3
+                            midiMode = next
+                            applyMidiMode(next)
                         },
                         selectedPad = selectedPad,
                         onSelectPad = { pad ->
@@ -189,31 +370,31 @@ class MainActivity : ComponentActivity() {
                             peaks = nativeGetPeaks(pad, 200)
                         },
                         peaks = peaks,
-                        loopStart = loopStarts[selectedPad],
-                        loopEnd = loopEnds[selectedPad],
+                        loopStart = loopStartBanks[bank][selectedPad],
+                        loopEnd = loopEndBanks[bank][selectedPad],
                         onLoopStart = { value ->
-                            val end = loopEnds[selectedPad]
+                            val end = loopEndBanks[bank][selectedPad]
                             val clamped = if (value > end - 1f) end - 1f else value
-                            loopStarts = loopStarts.toMutableList().also { it[selectedPad] = clamped }
+                            loopStartBanks = loopStartBanks.set2(bank, selectedPad, clamped)
                             nativeSetLoopPoints(selectedPad, clamped / 100f, end / 100f)
                         },
                         onLoopEnd = { value ->
-                            val start = loopStarts[selectedPad]
+                            val start = loopStartBanks[bank][selectedPad]
                             val clamped = if (value < start + 1f) start + 1f else value
-                            loopEnds = loopEnds.toMutableList().also { it[selectedPad] = clamped }
+                            loopEndBanks = loopEndBanks.set2(bank, selectedPad, clamped)
                             nativeSetLoopPoints(selectedPad, start / 100f, clamped / 100f)
                         },
-                        loopOn = loopOns[selectedPad],
+                        loopOn = loopOnBanks[bank][selectedPad],
                         onLoopToggle = {
-                            val newOn = !loopOns[selectedPad]
-                            loopOns = loopOns.toMutableList().also { it[selectedPad] = newOn }
+                            val newOn = !loopOnBanks[bank][selectedPad]
+                            loopOnBanks = loopOnBanks.set2(bank, selectedPad, newOn)
                             nativeSetLoopOn(selectedPad, newOn)
                         },
                         onTrim = {
                             val ok = nativeTrimToLoop(selectedPad)
                             if (ok) {
-                                loopStarts = loopStarts.toMutableList().also { it[selectedPad] = 0f }
-                                loopEnds = loopEnds.toMutableList().also { it[selectedPad] = 100f }
+                                loopStartBanks = loopStartBanks.set2(bank, selectedPad, 0f)
+                                loopEndBanks = loopEndBanks.set2(bank, selectedPad, 100f)
                                 nativeSetLoopPoints(selectedPad, 0f, 1f)
                                 peaks = nativeGetPeaks(selectedPad, 200)
                                 Toast.makeText(this, "Trimmed", Toast.LENGTH_SHORT).show()
@@ -221,29 +402,29 @@ class MainActivity : ComponentActivity() {
                         },
                         onPlayDown = { nativeTriggerPad(selectedPad) },
                         onPlayUp = { nativePadRelease(selectedPad) },
-                        padPitch = padPitchList[selectedPad],
+                        padPitch = pitchBanks[bank][selectedPad],
                         onPadPitch = { value ->
-                            padPitchList = padPitchList.toMutableList().also { it[selectedPad] = value }
+                            pitchBanks = pitchBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         },
-                        padAttack = padAttackList[selectedPad],
+                        padAttack = attackBanks[bank][selectedPad],
                         onPadAttack = { value ->
-                            padAttackList = padAttackList.toMutableList().also { it[selectedPad] = value }
+                            attackBanks = attackBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         },
-                        padDecay = padDecayList[selectedPad],
+                        padDecay = decayBanks[bank][selectedPad],
                         onPadDecay = { value ->
-                            padDecayList = padDecayList.toMutableList().also { it[selectedPad] = value }
+                            decayBanks = decayBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         },
-                        padSustain = padSustainList[selectedPad],
+                        padSustain = sustainBanks[bank][selectedPad],
                         onPadSustain = { value ->
-                            padSustainList = padSustainList.toMutableList().also { it[selectedPad] = value }
+                            sustainBanks = sustainBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         },
-                        padReleaseMs = padReleaseList[selectedPad],
+                        padReleaseMs = releaseBanks[bank][selectedPad],
                         onPadReleaseMs = { value ->
-                            padReleaseList = padReleaseList.toMutableList().also { it[selectedPad] = value }
+                            releaseBanks = releaseBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         }
                     )
@@ -263,6 +444,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        teardownMidi()
         nativeRelease()
         super.onDestroy()
     }
@@ -289,6 +471,10 @@ fun Sp1200App(
     onGateModeChange: (Boolean) -> Unit,
     pitch: Float,
     onPitchChange: (Float) -> Unit,
+    crunch: Boolean,
+    onCrunchChange: (Boolean) -> Unit,
+    bank: Int,
+    onBankChange: (Int) -> Unit,
     view: Int,
     onViewChange: (Int) -> Unit,
     playing: Boolean,
@@ -299,6 +485,13 @@ fun Sp1200App(
     onSwingChange: (Float) -> Unit,
     pattern: List<Int>,
     onToggleStep: (Int, Int) -> Unit,
+    mutes: List<Boolean>,
+    onMuteToggle: (Int) -> Unit,
+    solos: List<Boolean>,
+    onSoloToggle: (Int) -> Unit,
+    midiMode: Int,
+    midiDeviceName: String,
+    onMidiModeChange: () -> Unit,
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
@@ -348,6 +541,35 @@ fun Sp1200App(
                 Text(if (gateMode) "GATE" else "SHOT")
             }
         }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf("A", "B", "C", "D").forEachIndexed { i, name ->
+                Button(onClick = { onBankChange(i) }) {
+                    Text(name, color = if (bank == i) Color.Black else Color.White)
+                }
+            }
+            Button(onClick = { onCrunchChange(!crunch) }) {
+                Text(if (crunch) "12BIT" else "CLEAN")
+            }
+            Button(onClick = onMidiModeChange) {
+                Text(
+                    when (midiMode) {
+                        1 -> "MIDI M"
+                        2 -> "MIDI S"
+                        else -> "MIDI OFF"
+                    }
+                )
+            }
+        }
+
+        Text(
+            text = "MIDI: $midiDeviceName",
+            color = Color(0xFF888888),
+            style = MaterialTheme.typography.bodySmall
+        )
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -400,7 +622,11 @@ fun Sp1200App(
         when (view) {
             1 -> SequencerGrid(
                 pattern = pattern,
-                onToggleStep = onToggleStep
+                onToggleStep = onToggleStep,
+                mutes = mutes,
+                onMuteToggle = onMuteToggle,
+                solos = solos,
+                onSoloToggle = onSoloToggle
             )
 
             2 -> EditorView(
@@ -431,7 +657,7 @@ fun Sp1200App(
 
             else -> {
                 Text(
-                    text = "Tap = play. Long press = load WAV",
+                    text = "Tap = play. Long press = load WAV. Bank: ${'A' + bank}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF888888)
                 )
@@ -462,7 +688,11 @@ fun Sp1200App(
 @Composable
 fun SequencerGrid(
     pattern: List<Int>,
-    onToggleStep: (Int, Int) -> Unit
+    onToggleStep: (Int, Int) -> Unit,
+    mutes: List<Boolean>,
+    onMuteToggle: (Int) -> Unit,
+    solos: List<Boolean>,
+    onSoloToggle: (Int) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -471,8 +701,37 @@ fun SequencerGrid(
         for (pad in 0 until 8) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(26.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF333333))
+                        .clickable { onMuteToggle(pad) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("M", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(26.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (solos[pad]) Color(0xFFFDD835) else Color(0xFF333333))
+                        .clickable { onSoloToggle(pad) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "S",
+                        color = if (solos[pad]) Color.Black else Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 for (step in 0 until 16) {
                     val on = (pattern[pad] ushr step) and 1 == 1
                     val offColor = if (step % 4 == 0) Color(0xFF3A3A3A) else Color(0xFF262626)
