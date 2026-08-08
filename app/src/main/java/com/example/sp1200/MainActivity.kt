@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -53,7 +54,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
-import java.io.FileInputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
     private var lastTicks = 0L
 
     private val pollHandler = Handler(Looper.getMainLooper())
-    private var prevHits = List(8) { 0L }
+    private var prevHits = MutableList(8) { 0L }
 
     private var pendingPad by mutableStateOf(-1)
     private var bank by mutableStateOf(0)
@@ -401,8 +401,11 @@ class MainActivity : ComponentActivity() {
                 val f = File(dir, "b${b}_p$p.wav")
                 if (f.exists()) {
                     try {
-                        FileInputStream(f).use { fis ->
-                            if (nativeLoadSample(p, fis.fd)) {
+                        ParcelFileDescriptor.open(
+                            f,
+                            ParcelFileDescriptor.MODE_READ_ONLY
+                        ).use { pfd ->
+                            if (nativeLoadSample(p, pfd.fd)) {
                                 loadedBanks = loadedBanks.toMutableList().also { it[b] = it[b] + p }
                             }
                         }
