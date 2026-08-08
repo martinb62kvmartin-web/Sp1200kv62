@@ -9,41 +9,6 @@ JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetup(JNIEnv*, jobject) {
     if (engine == nullptr) {
         engine = new AudioEngine();
-    JNIEXPORT void JNICALL
-Java_com_example_sp1200_MainActivity_nativeSetMidiMode(JNIEnv*, jobject, jint mode) {
-    if (engine != nullptr) {
-        engine->setMidiMode(static_cast<int>(mode));
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_sp1200_MainActivity_nativeMidiTick(JNIEnv*, jobject) {
-    if (engine != nullptr) {
-        engine->midiTick();
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_sp1200_MainActivity_nativeMidiStart(JNIEnv*, jobject) {
-    if (engine != nullptr) {
-        engine->midiStart();
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_example_sp1200_MainActivity_nativeMidiStop(JNIEnv*, jobject) {
-    if (engine != nullptr) {
-        engine->midiStop();
-    }
-}
-
-JNIEXPORT jlong JNICALL
-Java_com_example_sp1200_MainActivity_nativeGetMidiTicks(JNIEnv*, jobject) {
-    if (engine == nullptr) {
-        return 0;
-    }
-    return static_cast<jlong>(engine->getMidiTicksOut());
-}
     }
 }
 
@@ -92,6 +57,34 @@ JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetPitch(JNIEnv*, jobject, jfloat semitones) {
     if (engine != nullptr) {
         engine->setPitchSemitones(static_cast<double>(semitones));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetCrunch(JNIEnv*, jobject, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setCrunch(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetBank(JNIEnv*, jobject, jint bank) {
+    if (engine != nullptr) {
+        engine->setBank(static_cast<int>(bank));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetMute(JNIEnv*, jobject, jint padIndex, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setMute(padIndex, enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetSolo(JNIEnv*, jobject, jint padIndex, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setSolo(padIndex, enabled == JNI_TRUE);
     }
 }
 
@@ -180,6 +173,42 @@ Java_com_example_sp1200_MainActivity_nativeSetPadParams(JNIEnv*, jobject, jint p
                              static_cast<double>(sustain),
                              static_cast<double>(release));
     }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetMidiMode(JNIEnv*, jobject, jint mode) {
+    if (engine != nullptr) {
+        engine->setMidiMode(static_cast<int>(mode));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiTick(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiTick();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiStart(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiStart();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiStop(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiStop();
+    }
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetMidiTicks(JNIEnv*, jobject) {
+    if (engine == nullptr) {
+        return 0;
+    }
+    return static_cast<jlong>(engine->getMidiTicksOut());
 }
 
 }
