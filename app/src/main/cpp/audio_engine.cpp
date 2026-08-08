@@ -2,6 +2,7 @@
 
 #include <android/log.h>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <unistd.h>
 
@@ -18,10 +19,67 @@ double clampd(double v, double lo, double hi) {
     return v;
 }
 
-float quant12f(float x) {
+float ulawEncode(float x) {
+    const float mu = 255.0f;
+    const float s = x < 0.0f ? -1.0f : 1.0f;
+    const float a = std::fabs(x);
+    const float y = std::log1p(mu * a) / std::log1p(mu);
+    return s * y;
+}
+
+float ulawDecode(float y) {
+    const float mu = 255.0f;
+    const float s = y < 0.0f ? -1.0f : 1.0f;
+    const float a = std::fabs(y);
+    const float x = (std::pow(1.0f + mu, a) - 1.0f) / mu;
+    return s * x;
+}
+
+float vintage(float x) {
+    float e = ulawEncode(x);
     constexpr float q = 2048.0f;
-    const float y = x * q;
-    return std::floor(y + 0.5f) / q;
+    e = std::floor(e * q + 0.5f) / q;
+    return ulawDecode(e);
+}
+
+bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (f == nullptr) {
+        return false;
+    }
+
+    const uint32_t n = static_cast<uint32_t>(data.size());
+    const uint32_t dataSize = n * 2;
+    const uint32_t chunkSize = 36 + dataSize;
+    const uint16_t one = 1;
+    const uint16_t ch = 1;
+    const uint16_t bps = 16;
+    const uint32_t fmtSize = 16;
+    const uint32_t byteRate = rate * 2;
+    const uint16_t blockAlign = 2;
+
+    std::fwrite("RIFF", 1, 4, f);
+    std::fwrite(&chunkSize, 4, 1, f);
+    std::fwrite("WAVE", 1, 4, f);
+    std::fwrite("fmt ", 1, 4, f);
+    std::fwrite(&fmtSize, 4, 1, f);
+    std::fwrite(&one, 2, 1, f);
+    std::fwrite(&ch, 2, 1, f);
+    std::fwrite(&rate, 4, 1, f);
+    std::fwrite(&byteRate, 4, 1, f);
+    std::fwrite(&blockAlign, 2, 1, f);
+    std::fwrite(&bps, 2, 1, f);
+    std::fwrite("data", 1, 4, f);
+    std::fwrite(&dataSize, 4, 1, f);
+
+    for (float v : data) {
+        const float c = v < -1.0f ? -1.0f : (v > 1.0f ? 1.0f : v);
+        const int16_t s = static_cast<int16_t>(c * 32767.0f);
+        std::fwrite(&s, 2, 1, f);
+    }
+
+    std::fclose(f);
+    return true;
 }
 }
 
@@ -36,6 +94,7 @@ AudioEngine::AudioEngine() {
     for (auto& row : padR) for (auto& f : row) f.store(0.05);
     for (auto& m : mutes) m.store(false);
     for (auto& s : solos) s.store(false);
+    for (auto& h : padHits) h.store(0);
 }
 
 AudioEngine::~AudioEngine() {
@@ -87,6 +146,14 @@ bool AudioEngine::start() {
 }
 
 void AudioEngine::stop() {
+    recording.store(false, std::memory_order_relaxed);
+
+    if (inputStream) {
+        inputStream->stop();
+        inputStream->close();
+        inputStream.reset();
+    }
+
     if (!running && !outputStream) {
         return;
     }
@@ -133,6 +200,110 @@ void AudioEngine::midiStop() {
 
 long long AudioEngine::getMidiTicksOut() {
     return midiTicksOut.load(std::memory_order_relaxed);
+}
+
+void AudioEngine::setDataDir(const std::string& dir) {
+    dataDir = dir;
+}
+
+int AudioEngine::getCurrentStep() {
+    return currentStepPublic.load(std::memory_order_relaxed);
+}
+
+long long AudioEngine::getPadHits(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return 0;
+    }
+    return padHits[padIndex].load(std::memory_order_relaxed);
+}
+
+bool AudioEngine::startRecording(int padIndex) {
+    if (recording.load(std::memory_order_relaxed)) {
+        return false;
+    }
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return false;
+    }
+
+    recPad = padIndex;
+    recBank = currentBank.load(std::memory_order_relaxed);
+
+    {
+        std::lock_guard<std::mutex> lock(recMutex);
+        recBuffer.clear();
+        recRate = 48000.0;
+    }
+
+    oboe::AudioStreamBuilder builder;
+    builder.setDirection(oboe::Direction::Input);
+    builder.setFormat(oboe::AudioFormat::Float);
+    builder.setChannelCount(1);
+    builder.setDataCallback(this);
+
+    oboe::Result r = builder.openStream(inputStream);
+    if (r != oboe::Result::OK) {
+        LOGI("Failed to open input stream");
+        return false;
+    }
+
+    r = inputStream->requestStart();
+    if (r != oboe::Result::OK) {
+        inputStream->close();
+        inputStream.reset();
+        return false;
+    }
+
+    recording.store(true, std::memory_order_relaxed);
+    LOGI("Recording started on pad %d", padIndex);
+    return true;
+}
+
+bool AudioEngine::stopRecording() {
+    if (!recording.exchange(false, std::memory_order_relaxed)) {
+        return false;
+    }
+
+    if (inputStream) {
+        inputStream->stop();
+        inputStream->close();
+        inputStream.reset();
+    }
+
+    std::vector<float> buf;
+    double rate;
+    {
+        std::lock_guard<std::mutex> lock(recMutex);
+        buf.swap(recBuffer);
+        rate = recRate;
+    }
+
+    if (buf.size() < 1600 || rate <= 0.0) {
+        LOGI("Recording too short");
+        return false;
+    }
+
+    auto sample = std::make_shared<Sample>();
+    sample->sampleRate = rate;
+    sample->data = std::move(buf);
+
+    const int b = recBank;
+    const int p = recPad;
+
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        samples[b][p] = sample;
+    }
+
+    loopStartFrac[b][p].store(0.0, std::memory_order_relaxed);
+    loopEndFrac[b][p].store(1.0, std::memory_order_relaxed);
+
+    if (!dataDir.empty()) {
+        const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(p) + ".wav";
+        writeWavFile(path, sample->data, static_cast<uint32_t>(rate));
+    }
+
+    LOGI("Recording stored on bank %d pad %d", b, p);
+    return true;
 }
 
 void AudioEngine::setBank(int bank) {
@@ -292,6 +463,11 @@ bool AudioEngine::trimToLoop(int padIndex) {
     loopStartFrac[b][padIndex].store(0.0, std::memory_order_relaxed);
     loopEndFrac[b][padIndex].store(1.0, std::memory_order_relaxed);
 
+    if (!dataDir.empty()) {
+        const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(padIndex) + ".wav";
+        writeWavFile(path, dst->data, static_cast<uint32_t>(dst->sampleRate));
+    }
+
     LOGI("Trimmed bank %d pad %d to %zu frames", b, padIndex, dst->data.size());
     return true;
 }
@@ -368,6 +544,8 @@ void AudioEngine::triggerVoice(int padIndex, double semiAdd) {
     voice.hasNextSample.store(true, std::memory_order_relaxed);
     voice.resetRequest.store(true, std::memory_order_relaxed);
     voice.active.store(true, std::memory_order_relaxed);
+
+    padHits[padIndex].fetch_add(1, std::memory_order_relaxed);
 }
 
 void AudioEngine::triggerPad(int padIndex) {
@@ -378,6 +556,8 @@ void AudioEngine::triggerPad(int padIndex) {
 }
 
 void AudioEngine::fireStep(int step) {
+    currentStepPublic.store(step, std::memory_order_relaxed);
+
     const int b = currentBank.load(std::memory_order_relaxed);
 
     for (int p = 0; p < kNumPads; ++p) {
@@ -486,6 +666,15 @@ bool AudioEngine::loadSample(int padIndex, int fd) {
 
     loopStartFrac[b][padIndex].store(0.0, std::memory_order_relaxed);
     loopEndFrac[b][padIndex].store(1.0, std::memory_order_relaxed);
+
+    if (!dataDir.empty()) {
+        const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(padIndex) + ".wav";
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (f != nullptr) {
+            std::fwrite(bytes.data(), 1, bytes.size(), f);
+            std::fclose(f);
+        }
+    }
 
     LOGI("Loaded sample bank %d pad %d, frames=%zu", b, padIndex, sample->data.size());
     return true;
@@ -597,6 +786,16 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         void* audioData,
         int32_t numFrames
 ) {
+    if (stream->getDirection() == oboe::Direction::Input) {
+        if (recording.load(std::memory_order_relaxed)) {
+            const float* in = static_cast<const float*>(audioData);
+            std::lock_guard<std::mutex> lock(recMutex);
+            recBuffer.insert(recBuffer.end(), in, in + numFrames);
+            recRate = stream->getSampleRate();
+        }
+        return oboe::DataCallbackResult::Continue;
+    }
+
     auto* output = static_cast<float*>(audioData);
 
     if (sampleRate <= 0.0 && stream != nullptr) {
@@ -800,7 +999,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
 
         if (crunch) {
-            mix = quant12f(mix);
+            lpState += 0.35f * (mix - lpState);
+            mix = vintage(lpState);
         }
 
         output[frame] = mix * 0.8f;
