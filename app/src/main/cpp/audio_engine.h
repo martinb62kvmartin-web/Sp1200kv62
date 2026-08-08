@@ -24,7 +24,12 @@ public:
     void padRelease(int padIndex);
     void setGateMode(bool enabled);
     void setPitchSemitones(double semitones);
+    void setCrunch(bool enabled);
     bool loadSample(int padIndex, int fd);
+
+    void setBank(int bank);
+    void setMute(int padIndex, bool enabled);
+    void setSolo(int padIndex, bool enabled);
 
     void setSeqPlaying(bool playing);
     void setSeqBpm(double bpm);
@@ -48,6 +53,7 @@ public:
 private:
     static constexpr int kNumPads = 8;
     static constexpr int kSteps = 16;
+    static constexpr int kBanks = 4;
 
     struct Voice {
         std::atomic<bool> active{false};
@@ -61,6 +67,7 @@ private:
         double pos = 0.0;
 
         int padIndex = 0;
+        int bank = 0;
         bool loopEnabled = false;
         double loopStart = 0.0;
         double loopEnd = 0.0;
@@ -92,29 +99,35 @@ private:
 
     std::shared_ptr<oboe::AudioStream> outputStream;
     std::array<Voice, kNumPads> voices;
-    std::array<std::shared_ptr<const Sample>, kNumPads> samples;
+    std::array<std::array<std::shared_ptr<const Sample>, kNumPads>, kBanks> samples{};
     std::mutex sampleMutex;
     std::atomic<bool> gateMode{false};
+    std::atomic<bool> crunchOn{true};
     std::atomic<double> pitchRate{1.0};
+    std::atomic<int> currentBank{0};
+
+    std::array<std::atomic<bool>, kNumPads> mutes{};
+    std::array<std::atomic<bool>, kNumPads> solos{};
+    std::atomic<int> soloCount{0};
 
     std::atomic<bool> seqPlaying{false};
     std::atomic<bool> seqRestart{false};
     std::atomic<double> seqBpm{90.0};
     std::atomic<double> seqSwing{0.0};
-    std::array<std::atomic<int>, kNumPads> seqMask{};
+    std::array<std::array<std::atomic<int>, kNumPads>, kBanks> seqMask{};
     double totalFrames = 0.0;
     double nextStepFrame = 0.0;
     int seqStep = 0;
 
-    std::array<std::atomic<double>, kNumPads> loopStartFrac{};
-    std::array<std::atomic<double>, kNumPads> loopEndFrac{};
-    std::array<std::atomic<bool>, kNumPads> loopOn{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopStartFrac{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopEndFrac{};
+    std::array<std::array<std::atomic<bool>, kNumPads>, kBanks> loopOn{};
 
-    std::array<std::atomic<double>, kNumPads> padPitch{};
-    std::array<std::atomic<double>, kNumPads> padA{};
-    std::array<std::atomic<double>, kNumPads> padD{};
-    std::array<std::atomic<double>, kNumPads> padS{};
-    std::array<std::atomic<double>, kNumPads> padR{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> padPitch{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> padA{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> padD{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> padS{};
+    std::array<std::array<std::atomic<double>, kNumPads>, kBanks> padR{};
 
     double sampleRate = 48000.0;
     bool running = false;
