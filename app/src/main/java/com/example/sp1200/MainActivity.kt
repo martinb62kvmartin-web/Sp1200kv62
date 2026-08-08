@@ -183,7 +183,7 @@ class MainActivity : ComponentActivity() {
             ?: emptyList()
     }
 
-    private fun isPcm16Wav(f: File): Boolean {
+    private fun isRiffWav(f: File): Boolean {
         return try {
             val head = ByteArray(12)
             f.inputStream().use { ins ->
@@ -223,6 +223,83 @@ class MainActivity : ComponentActivity() {
         target.writeBytes(bb.array())
     }
 
+    private fun convertWavFile(file: File): Boolean {
+        try {
+            val bytes = file.readBytes()
+            if (bytes.size < 44) return false
+            if (String(bytes, 0, 4) != "RIFF" || String(bytes, 8, 4) != "WAVE") return false
+
+            val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            var pos = 12
+            var format = 0
+            var channels = 0
+            var bits = 0
+            var rate = 44100
+            var dataOff = -1
+            var dataSize = 0
+
+            while (pos + 8 <= bytes.size) {
+                val id = String(bytes, pos, 4)
+                val size = bb.getInt(pos + 4)
+                val body = pos + 8
+
+                if (id == "fmt " && size >= 16) {
+                    format = bb.getShort(body).toInt() and 0xFFFF
+                    channels = bb.getShort(body + 2).toInt() and 0xFFFF
+                    rate = bb.getInt(body + 4)
+                    bits = bb.getShort(body + 14).toInt() and 0xFFFF
+                } else if (id == "data") {
+                    dataOff = body
+                    dataSize = size
+                }
+
+                pos = body + size + (size and 1)
+            }
+
+            if (dataOff < 0 || channels <= 0 || rate <= 0) return false
+            if (format == 1 && bits == 16) return true
+
+            val bytesPer = bits / 8
+            if (bytesPer <= 0) return false
+            val frameBytes = channels * bytesPer
+            var frames = dataSize / frameBytes
+            val maxFrames = (bytes.size - dataOff) / frameBytes
+            if (frames > maxFrames) frames = maxFrames
+            if (frames <= 0) return false
+
+            val mono = FloatArray(frames)
+            for (i in 0 until frames) {
+                var acc = 0f
+                for (c in 0 until channels) {
+                    val o = dataOff + i * frameBytes + c * bytesPer
+                    acc += when {
+                        format == 1 && bits == 8 ->
+                            ((bytes[o].toInt() and 0xFF) - 128) / 128f
+                        format == 1 && bits == 16 ->
+                            bb.getShort(o).toInt() / 32768f
+                        format == 1 && bits == 24 -> {
+                            val b0 = bytes[o].toInt() and 0xFF
+                            val b1 = bytes[o + 1].toInt() and 0xFF
+                            val b2 = bytes[o + 2].toInt()
+                            ((b2 shl 16) or (b1 shl 8) or b0) / 8388608f
+                        }
+                        format == 1 && bits == 32 ->
+                            bb.getInt(o) / 2147483648f
+                        format == 3 && bits == 32 ->
+                            bb.getFloat(o)
+                        else -> return false
+                    }
+                }
+                mono[i] = acc / channels
+            }
+
+            writeWavKt(file, mono, rate)
+            return true
+        } catch (_: Exception) {
+            return false
+        }
+    }
+
     private fun decodeAudioToWav(uri: Uri, target: File): Boolean {
         var decoder: MediaCodec? = null
         var extractor: MediaExtractor? = null
@@ -250,17 +327,13 @@ class MainActivity : ComponentActivity() {
             decoder.configure(format, null, null, 0)
             decoder.start()
 
-            val sampleRate =
-                if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE))
-                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
-            val channels =
-                if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
-                    format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
-
             val pcm = ArrayList<Short>()
             val info = MediaCodec.BufferInfo()
             var inputDone = false
             var outputDone = false
+            var gotFormat = false
+            var sampleRate = 44100
+            var channels = 1
             val timeout = 10000L
 
             while (!outputDone) {
@@ -271,6 +344,7 @@ class MainActivity : ComponentActivity() {
                         if (buf == null) {
                             decoder.queueInputBuffer(inIdx, 0, 0, 0, 0)
                         } else {
+                            buf.clear()
                             val n = extractor.readSampleData(buf, 0)
                             if (n < 0) {
                                 decoder.queueInputBuffer(
@@ -287,19 +361,35 @@ class MainActivity : ComponentActivity() {
 
                 val outIdx = decoder.dequeueOutputBuffer(info, timeout)
                 if (outIdx >= 0) {
-                    val buf = decoder.getOutputBuffer(outIdx)
-                    if (buf != null && info.size > 0) {
-                        val arr = ByteArray(info.size)
-                        buf.get(arr)
-                        for (j in 0 until info.size / 2) {
-                            val lo = arr[j * 2].toInt() and 0xFF
-                            val hi = arr[j * 2 + 1].toInt()
-                            pcm.add(((hi shl 8) or lo).toShort())
+                    if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                        decoder.releaseOutputBuffer(outIdx, false)
+                    } else {
+                        if (!gotFormat) {
+                            val of = decoder.outputFormat
+                            if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
+                                sampleRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            }
+                            if (of.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
+                                channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            }
+                            gotFormat = true
                         }
-                    }
-                    decoder.releaseOutputBuffer(outIdx, false)
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        outputDone = true
+
+                        val buf = decoder.getOutputBuffer(outIdx)
+                        if (buf != null && info.size > 0) {
+                            val arr = ByteArray(info.size)
+                            buf.get(arr)
+                            for (j in 0 until info.size / 2) {
+                                val lo = arr[j * 2].toInt() and 0xFF
+                                val hi = arr[j * 2 + 1].toInt()
+                                pcm.add(((hi shl 8) or lo).toShort())
+                            }
+                        }
+                        decoder.releaseOutputBuffer(outIdx, false)
+
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                            outputDone = true
+                        }
                     }
                 }
             }
@@ -369,6 +459,14 @@ class MainActivity : ComponentActivity() {
             }
         } catch (_: Exception) {
         }
+    }
+
+    private fun auditionPitch(pad: Int, semi: Int) {
+        nativeSetPitch(semi.toFloat())
+        nativeTriggerPad(pad)
+        pollHandler.postDelayed({
+            nativeSetPitch(pitch)
+        }, 500)
     }
 
     private fun pushPadParams(pad: Int) {
@@ -451,13 +549,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (!isPcm16Wav(target)) {
-                    val ok = decodeAudioToWav(uri, target)
-                    if (!ok) {
-                        target.delete()
-                        Toast.makeText(this, "Unsupported audio format", Toast.LENGTH_SHORT).show()
-                        return@registerForActivityResult
-                    }
+                val ok = if (isRiffWav(target)) {
+                    convertWavFile(target)
+                } else {
+                    decodeAudioToWav(uri, target)
+                }
+
+                if (!ok) {
+                    target.delete()
+                    Toast.makeText(this, "Unsupported audio format", Toast.LENGTH_SHORT).show()
+                    return@registerForActivityResult
                 }
 
                 refreshLib()
@@ -915,6 +1016,7 @@ class MainActivity : ComponentActivity() {
                             }
                             nativeSetRoll(pad, step, value)
                         },
+                        onAudition = { pad, semi -> auditionPitch(pad, semi) },
                         playhead = playhead,
                         flashes = hitTimes.map { System.currentTimeMillis() - it < 150 },
                         recording = recording,
@@ -1100,6 +1202,7 @@ fun Sp1200App(
     onMidiModeChange: () -> Unit,
     roll: List<List<Int>>,
     onToggleRollCell: (Int, Int, Int) -> Unit,
+    onAudition: (Int, Int) -> Unit,
     playhead: Int,
     flashes: List<Boolean>,
     recording: Boolean,
@@ -1264,15 +1367,18 @@ fun Sp1200App(
                 onPadReleaseMs = onPadReleaseMs
             )
 
-            3 -> RollView(
-                selectedPad = selectedPad,
-                onSelectPad = onSelectPad,
-                loadedPads = loadedPads,
-                roll = roll,
-                onToggleRollCell = onToggleRollCell,
-                playhead = playhead,
-                playing = playing
-            )
+            3 -> Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                RollView(
+                    selectedPad = selectedPad,
+                    onSelectPad = onSelectPad,
+                    loadedPads = loadedPads,
+                    roll = roll,
+                    onToggleRollCell = onToggleRollCell,
+                    onAudition = onAudition,
+                    playhead = playhead,
+                    playing = playing
+                )
+            }
 
             4 -> LibView(
                 files = libFiles,
@@ -1390,39 +1496,40 @@ fun LibView(
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            items(files.size) { i ->
-                val name = files[i]
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(files.size) { i ->
+                    val name = files[i]
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (armedFile == name) Color(0xFFE91E5A) else Color(0xFF262636))
-                        .pointerInput(name) {
-                            detectTapGestures(
-                                onTap = {
-                                    if (armedFile == name) {
-                                        armedFile = null
-                                    } else {
-                                        onPreview(name)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (armedFile == name) Color(0xFFE91E5A) else Color(0xFF262636))
+                            .pointerInput(name) {
+                                detectTapGestures(
+                                    onTap = {
+                                        if (armedFile == name) {
+                                            armedFile = null
+                                        } else {
+                                            onPreview(name)
+                                        }
+                                    },
+                                    onLongPress = {
+                                        armedFile = name
                                     }
-                                },
-                                onLongPress = {
-                                    armedFile = name
-                                }
-                            )
-                        },
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    Text(
-                        text = name,
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 12.dp)
-                    )
+                                )
+                            },
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            text = name,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
                 }
             }
         }
@@ -1436,11 +1543,12 @@ fun RollView(
     loadedPads: Set<Int>,
     roll: List<List<Int>>,
     onToggleRollCell: (Int, Int, Int) -> Unit,
+    onAudition: (Int, Int) -> Unit,
     playhead: Int,
     playing: Boolean
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(
@@ -1473,51 +1581,61 @@ fun RollView(
         }
 
         Text(
-            text = "ROLL: notes play selected pad at row pitch (+6..-5)",
+            text = "ROLL: tap key = hear note, tap cell = place note",
             color = Color(0xFF888888),
             style = MaterialTheme.typography.bodySmall
         )
 
-        for (r in 0 until 12) {
-            val pitchOff = 6 - r
-            val enc = pitchOff + 13
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            items(25) { r ->
+                val pitchOff = 12 - r
+                val enc = pitchOff + 13
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(24.dp)
-                        .height(22.dp),
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
-                        color = Color(0xFF888888),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-
-                for (step in 0 until 16) {
-                    val on = roll[selectedPad][step] == enc
-                    val offColor = when {
-                        playing && step == playhead -> Color(0xFF5A5A7A)
-                        step % 4 == 0 -> Color(0xFF3A3A3A)
-                        else -> Color(0xFF262626)
-                    }
-
                     Box(
                         modifier = Modifier
-                            .weight(1f)
+                            .width(28.dp)
                             .height(22.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(if (on) padColor(selectedPad) else offColor)
-                            .clickable {
-                                onToggleRollCell(selectedPad, step, if (on) 0 else enc)
-                            }
-                    )
+                            .background(Color(0xFF3A3A5A))
+                            .clickable { onAudition(selectedPad, pitchOff) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
+                            color = Color.White,
+                            fontSize = 8.sp
+                        )
+                    }
+
+                    for (step in 0 until 16) {
+                        val on = roll[selectedPad][step] == enc
+                        val offColor = when {
+                            playing && step == playhead -> Color(0xFF5A5A7A)
+                            step % 4 == 0 -> Color(0xFF3A3A3A)
+                            else -> Color(0xFF262626)
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(22.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(if (on) padColor(selectedPad) else offColor)
+                                .clickable {
+                                    onToggleRollCell(selectedPad, step, if (on) 0 else enc)
+                                }
+                        )
+                    }
                 }
             }
         }
