@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 struct Sample {
@@ -50,6 +51,13 @@ public:
     void midiStart();
     void midiStop();
     long long getMidiTicksOut();
+
+    void setDataDir(const std::string& dir);
+    int getCurrentStep();
+    long long getPadHits(int padIndex);
+
+    bool startRecording(int padIndex);
+    bool stopRecording();
 
     oboe::DataCallbackResult onAudioReady(
             oboe::AudioStream* stream,
@@ -107,6 +115,7 @@ private:
     void fireStep(int step);
 
     std::shared_ptr<oboe::AudioStream> outputStream;
+    std::shared_ptr<oboe::AudioStream> inputStream;
     std::array<Voice, kNumPads> voices;
     std::array<std::array<std::shared_ptr<const Sample>, kNumPads>, kBanks> samples{};
     std::mutex sampleMutex;
@@ -129,6 +138,8 @@ private:
     double nextStepFrame = 0.0;
     double nextTickFrame = 0.0;
     int seqStep = 0;
+    std::atomic<int> currentStepPublic{0};
+    std::array<std::atomic<long long>, kNumPads> padHits{};
 
     std::atomic<int> midiMode{0};
     std::atomic<long long> midiTicksOut{0};
@@ -136,6 +147,16 @@ private:
     std::atomic<bool> midiStartReq{false};
     std::atomic<bool> midiStopReq{false};
     int tickAccum = 0;
+
+    std::string dataDir;
+    std::atomic<bool> recording{false};
+    std::mutex recMutex;
+    std::vector<float> recBuffer;
+    double recRate = 48000.0;
+    int recPad = 0;
+    int recBank = 0;
+
+    float lpState = 0.0f;
 
     std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopStartFrac{};
     std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopEndFrac{};
