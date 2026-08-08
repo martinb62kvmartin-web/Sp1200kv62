@@ -125,6 +125,13 @@ Java_com_example_sp1200_MainActivity_nativeSeqSetMask(JNIEnv*, jobject, jint pad
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetRoll(JNIEnv*, jobject, jint padIndex, jint step, jint value) {
+    if (engine != nullptr) {
+        engine->setRoll(padIndex, static_cast<int>(step), static_cast<int>(value));
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetLoopPoints(JNIEnv*, jobject, jint padIndex, jfloat startFrac, jfloat endFrac) {
     if (engine != nullptr) {
         engine->setLoopPoints(padIndex, static_cast<double>(startFrac), static_cast<double>(endFrac));
