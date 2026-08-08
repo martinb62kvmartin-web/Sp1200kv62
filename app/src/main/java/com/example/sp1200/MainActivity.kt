@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,8 +29,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -42,18 +45,25 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.localToRoot
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
+import kotlin.math.roundToInt
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -86,6 +96,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetMute(padIndex: Int, enabled: Boolean)
     private external fun nativeSetSolo(padIndex: Int, enabled: Boolean)
     private external fun nativeLoadSample(padIndex: Int, fd: Int): Boolean
+    private external fun nativePreviewFromFd(fd: Int): Boolean
     private external fun nativeSeqSetPlaying(playing: Boolean)
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
@@ -147,6 +158,7 @@ class MainActivity : ComponentActivity() {
     private var playhead by mutableStateOf(0)
     private var pollTick by mutableStateOf(0)
     private var hitTimes by mutableStateOf(List(8) { 0L })
+    private var libFiles by mutableStateOf(listOf<String>())
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
@@ -159,6 +171,48 @@ class MainActivity : ComponentActivity() {
     private var decayBanks by mutableStateOf(List(4) { List(8) { 0f } })
     private var sustainBanks by mutableStateOf(List(4) { List(8) { 100f } })
     private var releaseBanks by mutableStateOf(List(4) { List(8) { 50f } })
+
+    private fun libraryDir(): File {
+        val dir = File(filesDir, "library")
+        dir.mkdirs()
+        return dir
+    }
+
+    private fun refreshLib() {
+        libFiles = libraryDir().listFiles()
+            ?.filter { it.isFile && it.name.lowercase().endsWith(".wav") }
+            ?.map { it.name }
+            ?.sorted()
+            ?: emptyList()
+    }
+
+    private fun previewFile(name: String) {
+        val f = File(libraryDir(), name)
+        if (!f.exists()) return
+        try {
+            ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                nativePreviewFromFd(pfd.fd)
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun assignFile(pad: Int, name: String) {
+        val f = File(libraryDir(), name)
+        if (!f.exists()) return
+        try {
+            ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                if (nativeLoadSample(pad, pfd.fd)) {
+                    loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + pad }
+                    if (pad == selectedPad) {
+                        peaks = nativeGetPeaks(pad, 200)
+                    }
+                    Toast.makeText(this, "PAD ${pad + 1}: $name", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
 
     private fun pushPadParams(pad: Int) {
         nativeSetPadParams(
@@ -204,6 +258,7 @@ class MainActivity : ComponentActivity() {
             if (ok) {
                 loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + selectedPad }
                 peaks = nativeGetPeaks(selectedPad, 200)
+                refreshLib()
                 Toast.makeText(this, "Recorded to PAD ${selectedPad + 1}", Toast.LENGTH_SHORT).show()
             }
         } else {
@@ -216,6 +271,33 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private val importLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            if (uri == null) return@registerForActivityResult
+            try {
+                val rawName = uri.lastPathSegment ?: "import.wav"
+                var safe = rawName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                if (!safe.lowercase().endsWith(".wav")) safe += ".wav"
+
+                val dir = libraryDir()
+                var target = File(dir, safe)
+                var counter = 1
+                while (target.exists()) {
+                    target = File(dir, "imp${counter}_$safe")
+                    counter++
+                }
+
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    target.outputStream().use { outs ->
+                        ins.copyTo(outs)
+                    }
+                }
+                refreshLib()
+                Toast.makeText(this, "Imported: ${target.name}", Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {
+            }
+        }
 
     private fun saveState() {
         try {
@@ -569,6 +651,7 @@ class MainActivity : ComponentActivity() {
         loadState()
         pushAllToNative()
         restoreSamples()
+        refreshLib()
 
         midiManager = getSystemService(MIDI_SERVICE) as MidiManager
 
@@ -608,7 +691,10 @@ class MainActivity : ComponentActivity() {
                             peaks = nativeGetPeaks(selectedPad, 200)
                         },
                         view = view,
-                        onViewChange = { view = it },
+                        onViewChange = { v ->
+                            view = v
+                            if (v == 4) refreshLib()
+                        },
                         playing = playing,
                         onPlayToggle = {
                             playing = !playing
@@ -666,6 +752,10 @@ class MainActivity : ComponentActivity() {
                         flashes = hitTimes.map { System.currentTimeMillis() - it < 150 },
                         recording = recording,
                         onRecToggle = { onRecToggle() },
+                        libFiles = libFiles,
+                        onImport = { importLauncher.launch(arrayOf("audio/*")) },
+                        onPreview = { name -> previewFile(name) },
+                        onAssign = { pad, name -> assignFile(pad, name) },
                         selectedPad = selectedPad,
                         onSelectPad = { pad ->
                             selectedPad = pad
@@ -847,6 +937,10 @@ fun Sp1200App(
     flashes: List<Boolean>,
     recording: Boolean,
     onRecToggle: () -> Unit,
+    libFiles: List<String>,
+    onImport: () -> Unit,
+    onPreview: (String) -> Unit,
+    onAssign: (Int, String) -> Unit,
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
@@ -887,6 +981,7 @@ fun Sp1200App(
             SmallButton("SEQ", view == 1) { onViewChange(1) }
             SmallButton("EDIT", view == 2) { onViewChange(2) }
             SmallButton("ROLL", view == 3) { onViewChange(3) }
+            SmallButton("LIB", view == 4) { onViewChange(4) }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1012,6 +1107,16 @@ fun Sp1200App(
                 playing = playing
             )
 
+            4 -> LibView(
+                files = libFiles,
+                onImport = onImport,
+                onPreview = onPreview,
+                onAssign = onAssign,
+                loadedPads = loadedPads,
+                selectedPad = selectedPad,
+                onSelectPad = onSelectPad
+            )
+
             else -> {
                 Text(
                     text = "Tap = play. Long press = load WAV. Bank: ${'A' + bank}",
@@ -1038,6 +1143,146 @@ fun Sp1200App(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun LibView(
+    files: List<String>,
+    onImport: () -> Unit,
+    onPreview: (String) -> Unit,
+    onAssign: (Int, String) -> Unit,
+    loadedPads: Set<Int>,
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit
+) {
+    val padBounds = remember { mutableStateMapOf<Int, Rect>() }
+    val itemRoots = remember { mutableStateMapOf<String, Offset>() }
+    var dragFile by remember { mutableStateOf<String?>(null) }
+    var dragPos by remember { mutableStateOf(Offset.Zero) }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                for (pad in 0 until 8) {
+                    val bg = when {
+                        pad == selectedPad -> Color.White
+                        loadedPads.contains(pad) -> padColor(pad)
+                        else -> Color(0xFF2A2A2A)
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(bg)
+                            .clickable { onSelectPad(pad) }
+                            .onGloballyPositioned { coords ->
+                                padBounds[pad] = coords.boundsInRoot()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${pad + 1}",
+                            color = if (pad == selectedPad) Color.Black else Color.White,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(onClick = onImport) { Text("IMPORT") }
+                Text(
+                    text = "Tap = play. Hold + drag to pad = assign",
+                    color = Color(0xFF888888),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(files.size) { i ->
+                    val name = files[i]
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF262636))
+                            .onGloballyPositioned { coords ->
+                                itemRoots[name] = coords.localToRoot(Offset.Zero)
+                            }
+                            .clickable { onPreview(name) }
+                            .pointerInput(name) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = { offset ->
+                                        dragFile = name
+                                        dragPos = (itemRoots[name] ?: Offset.Zero) + offset
+                                    },
+                                    onDrag = { change, _ ->
+                                        change.consume()
+                                        dragPos = (itemRoots[name] ?: Offset.Zero) + change.position
+                                    },
+                                    onDragEnd = {
+                                        val pos = dragPos
+                                        val target = padBounds.entries
+                                            .firstOrNull { it.value.contains(pos) }?.key
+                                        if (target != null) {
+                                            onAssign(target, name)
+                                        }
+                                        dragFile = null
+                                    },
+                                    onDragCancel = {
+                                        dragFile = null
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            text = name,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        if (dragFile != null) {
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(dragPos.x.roundToInt(), dragPos.y.roundToInt())
+                    }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFE91E5A))
+                    .padding(8.dp)
+            ) {
+                Text(
+                    text = dragFile ?: "",
+                    color = Color.White,
+                    fontSize = 10.sp
+                )
             }
         }
     }
