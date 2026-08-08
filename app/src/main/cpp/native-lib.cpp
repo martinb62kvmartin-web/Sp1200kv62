@@ -133,4 +133,18 @@ Java_com_example_sp1200_MainActivity_nativeGetPeaks(JNIEnv* env, jobject, jint p
     return result;
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPadParams(JNIEnv*, jobject, jint padIndex,
+                                                        jfloat pitch, jfloat attack, jfloat decay,
+                                                        jfloat sustain, jfloat release) {
+    if (engine != nullptr) {
+        engine->setPadParams(padIndex,
+                             static_cast<double>(pitch),
+                             static_cast<double>(attack),
+                             static_cast<double>(decay),
+                             static_cast<double>(sustain),
+                             static_cast<double>(release));
+    }
+}
+
 }
