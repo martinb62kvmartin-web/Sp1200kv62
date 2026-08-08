@@ -1,6 +1,7 @@
 package com.example.sp1200
 
 import android.media.midi.MidiDevice
+import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
 import android.net.Uri
@@ -98,8 +99,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var midiManager: MidiManager
     private var midiDevice: MidiDevice? = null
-    private var outPort: MidiDevice.MidiInputPort? = null
-    private var inPort: MidiDevice.MidiOutputPort? = null
+    private var sendFn: ((ByteArray) -> Unit)? = null
+    private var closePortsFn: (() -> Unit)? = null
 
     @Volatile
     private var clockRunning = false
@@ -161,19 +162,15 @@ class MainActivity : ComponentActivity() {
         clockRunning = false
         clockThread = null
         try {
-            inPort?.close()
+            closePortsFn?.invoke()
         } catch (_: Exception) {
         }
-        try {
-            outPort?.close()
-        } catch (_: Exception) {
-        }
+        closePortsFn = null
+        sendFn = null
         try {
             midiDevice?.close()
         } catch (_: Exception) {
         }
-        inPort = null
-        outPort = null
         midiDevice = null
         midiDeviceName = "none"
     }
@@ -187,8 +184,24 @@ class MainActivity : ComponentActivity() {
 
         midiManager.openDevice(info, { device ->
             midiDevice = device
-            outPort = device.openInputPort(0)
-            midiDeviceName = info.properties.getString(MidiManager.PROPERTY_NAME) ?: "midi"
+            val port = device.openInputPort(0)
+
+            if (port != null) {
+                sendFn = { data ->
+                    try {
+                        port.send(data, 0, data.size, 0)
+                    } catch (_: Exception) {
+                    }
+                }
+                closePortsFn = {
+                    try {
+                        port.close()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            midiDeviceName = info.properties.getString(MidiDeviceInfo.PROPERTY_NAME) ?: "midi"
             startClockThread()
         }, null)
     }
@@ -202,9 +215,19 @@ class MainActivity : ComponentActivity() {
 
         midiManager.openDevice(info, { device ->
             midiDevice = device
-            inPort = device.openOutputPort(0)
-            inPort?.setReceiver(midiReceiver)
-            midiDeviceName = info.properties.getString(MidiManager.PROPERTY_NAME) ?: "midi"
+            val port = device.openOutputPort(0)
+
+            if (port != null) {
+                port.setReceiver(midiReceiver)
+                closePortsFn = {
+                    try {
+                        port.close()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            midiDeviceName = info.properties.getString(MidiDeviceInfo.PROPERTY_NAME) ?: "midi"
         }, null)
     }
 
@@ -219,10 +242,7 @@ class MainActivity : ComponentActivity() {
 
                 if (delta > 0) {
                     val arr = ByteArray(delta.toInt()) { 0xF8.toByte() }
-                    try {
-                        outPort?.send(arr, 0, arr.size, 0)
-                    } catch (_: Exception) {
-                    }
+                    sendFn?.invoke(arr)
                     lastTicks = cur
                 }
 
@@ -247,11 +267,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMidiByte(b: Int) {
-        val arr = byteArrayOf(b.toByte())
-        try {
-            outPort?.send(arr, 0, 1, 0)
-        } catch (_: Exception) {
-        }
+        sendFn?.invoke(byteArrayOf(b.toByte()))
     }
 
     private val pickSample =
