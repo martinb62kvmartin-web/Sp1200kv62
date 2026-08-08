@@ -367,8 +367,9 @@ void AudioEngine::padRelease(int padIndex) {
 
     const int b = currentBank.load(std::memory_order_relaxed);
     const bool loopHeld = loopOn[b][padIndex].load(std::memory_order_relaxed);
+    const bool sampleHeld = voices[padIndex].playingSample.load(std::memory_order_relaxed);
 
-    if (gateMode.load(std::memory_order_relaxed) || loopHeld) {
+    if (gateMode.load(std::memory_order_relaxed) || loopHeld || sampleHeld) {
         voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
     }
 }
@@ -513,6 +514,156 @@ std::vector<float> AudioEngine::getPeaks(int padIndex, int buckets) {
     return out;
 }
 
+std::shared_ptr<Sample> AudioEngine::parseWav(const std::vector<uint8_t>& bytes) {
+    if (bytes.size() < 44) {
+        return nullptr;
+    }
+
+    if (std::memcmp(bytes.data(), "RIFF", 4) != 0 ||
+        std::memcmp(bytes.data() + 8, "WAVE", 4) != 0) {
+        return nullptr;
+    }
+
+    int format = 0;
+    int numChannels = 0;
+    int bits = 0;
+    double rate = 44100.0;
+    const uint8_t* dataPtr = nullptr;
+    size_t dataSize = 0;
+
+    size_t pos = 12;
+    while (pos + 8 <= bytes.size()) {
+        const uint8_t* id = bytes.data() + pos;
+        uint32_t size = 0;
+        std::memcpy(&size, bytes.data() + pos + 4, 4);
+        const uint8_t* body = bytes.data() + pos + 8;
+
+        if (std::memcmp(id, "fmt ", 4) == 0 && size >= 16) {
+            uint16_t f = 0, ch = 0, bps = 0;
+            uint32_t sr = 0;
+            std::memcpy(&f, body, 2);
+            std::memcpy(&ch, body + 2, 2);
+            std::memcpy(&sr, body + 4, 4);
+            std::memcpy(&bps, body + 14, 2);
+            format = f;
+            numChannels = ch;
+            rate = sr;
+            bits = bps;
+        } else if (std::memcmp(id, "data", 4) == 0) {
+            dataPtr = body;
+            dataSize = size;
+            if (pos + 8 + dataSize > bytes.size()) {
+                dataSize = bytes.size() - pos - 8;
+            }
+        }
+
+        pos += 8 + size + (size & 1);
+    }
+
+    if (dataPtr == nullptr || numChannels <= 0) {
+        return nullptr;
+    }
+
+    if (!(format == 1 && bits == 16)) {
+        return nullptr;
+    }
+
+    auto sample = std::make_shared<Sample>();
+    sample->sampleRate = rate;
+
+    const size_t frameBytes = static_cast<size_t>(numChannels) * 2;
+    const size_t frames = dataSize / frameBytes;
+    sample->data.resize(frames);
+
+    for (size_t i = 0; i < frames; ++i) {
+        float acc = 0.0f;
+        for (int c = 0; c < numChannels; ++c) {
+            int16_t s = 0;
+            std::memcpy(&s, dataPtr + i * frameBytes + static_cast<size_t>(c) * 2, 2);
+            acc += static_cast<float>(s) / 32768.0f;
+        }
+        sample->data[i] = acc / static_cast<float>(numChannels);
+    }
+
+    return sample;
+}
+
+bool AudioEngine::previewFromFd(int fd) {
+    if (fd < 0) {
+        return false;
+    }
+
+    std::vector<uint8_t> bytes;
+    uint8_t buf[65536];
+    ssize_t n;
+    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+        bytes.insert(bytes.end(), buf, buf + n);
+    }
+
+    auto s = parseWav(bytes);
+    if (!s) {
+        return false;
+    }
+
+    Voice& v = voices[kNumPads];
+
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        v.nextSample = s;
+    }
+
+    v.bank = currentBank.load(std::memory_order_relaxed);
+    v.nextPitchAdd.store(0.0, std::memory_order_relaxed);
+    v.gateClosed.store(false, std::memory_order_relaxed);
+    v.type.store(0, std::memory_order_relaxed);
+    v.hasNextSample.store(true, std::memory_order_relaxed);
+    v.resetRequest.store(true, std::memory_order_relaxed);
+    v.active.store(true, std::memory_order_relaxed);
+
+    return true;
+}
+
+bool AudioEngine::loadSample(int padIndex, int fd) {
+    if (padIndex < 0 || padIndex >= kNumPads || fd < 0) {
+        return false;
+    }
+
+    const int b = currentBank.load(std::memory_order_relaxed);
+
+    std::vector<uint8_t> bytes;
+    uint8_t buf[65536];
+    ssize_t n;
+    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+        bytes.insert(bytes.end(), buf, buf + n);
+    }
+
+    auto sample = parseWav(bytes);
+    if (!sample) {
+        LOGI("Failed to parse WAV");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        samples[b][padIndex] = sample;
+    }
+
+    loopStartFrac[b][padIndex].store(0.0, std::memory_order_relaxed);
+    loopEndFrac[b][padIndex].store(1.0, std::memory_order_relaxed);
+
+    if (!dataDir.empty()) {
+        const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(padIndex) + ".wav";
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (f != nullptr) {
+            std::fwrite(bytes.data(), 1, bytes.size(), f);
+            std::fclose(f);
+        }
+    }
+
+    LOGI("Loaded sample bank %d pad %d, frames=%zu", b, padIndex, sample->data.size());
+    return true;
+}
+
 void AudioEngine::triggerVoice(int padIndex, double semiAdd) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
@@ -571,113 +722,6 @@ void AudioEngine::fireStep(int step) {
             triggerVoice(p, static_cast<double>(rp - 13));
         }
     }
-}
-
-bool AudioEngine::loadSample(int padIndex, int fd) {
-    if (padIndex < 0 || padIndex >= kNumPads || fd < 0) {
-        return false;
-    }
-
-    const int b = currentBank.load(std::memory_order_relaxed);
-
-    std::vector<uint8_t> bytes;
-    uint8_t buf[65536];
-    ssize_t n;
-    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
-        bytes.insert(bytes.end(), buf, buf + n);
-    }
-
-    if (bytes.size() < 44) {
-        return false;
-    }
-
-    if (std::memcmp(bytes.data(), "RIFF", 4) != 0 ||
-        std::memcmp(bytes.data() + 8, "WAVE", 4) != 0) {
-        LOGI("Not a WAV file");
-        return false;
-    }
-
-    int format = 0;
-    int numChannels = 0;
-    int bits = 0;
-    double rate = 44100.0;
-    const uint8_t* dataPtr = nullptr;
-    size_t dataSize = 0;
-
-    size_t pos = 12;
-    while (pos + 8 <= bytes.size()) {
-        const uint8_t* id = bytes.data() + pos;
-        uint32_t size = 0;
-        std::memcpy(&size, bytes.data() + pos + 4, 4);
-        const uint8_t* body = bytes.data() + pos + 8;
-
-        if (std::memcmp(id, "fmt ", 4) == 0 && size >= 16) {
-            uint16_t f = 0, ch = 0, bps = 0;
-            uint32_t sr = 0;
-            std::memcpy(&f, body, 2);
-            std::memcpy(&ch, body + 2, 2);
-            std::memcpy(&sr, body + 4, 4);
-            std::memcpy(&bps, body + 14, 2);
-            format = f;
-            numChannels = ch;
-            rate = sr;
-            bits = bps;
-        } else if (std::memcmp(id, "data", 4) == 0) {
-            dataPtr = body;
-            dataSize = size;
-            if (pos + 8 + dataSize > bytes.size()) {
-                dataSize = bytes.size() - pos - 8;
-            }
-        }
-
-        pos += 8 + size + (size & 1);
-    }
-
-    if (dataPtr == nullptr || numChannels <= 0) {
-        return false;
-    }
-
-    if (!(format == 1 && bits == 16)) {
-        LOGI("Unsupported WAV format. Need PCM 16-bit");
-        return false;
-    }
-
-    auto sample = std::make_shared<Sample>();
-    sample->sampleRate = rate;
-
-    const size_t frameBytes = static_cast<size_t>(numChannels) * 2;
-    const size_t frames = dataSize / frameBytes;
-    sample->data.resize(frames);
-
-    for (size_t i = 0; i < frames; ++i) {
-        float acc = 0.0f;
-        for (int c = 0; c < numChannels; ++c) {
-            int16_t s = 0;
-            std::memcpy(&s, dataPtr + i * frameBytes + static_cast<size_t>(c) * 2, 2);
-            acc += static_cast<float>(s) / 32768.0f;
-        }
-        sample->data[i] = acc / static_cast<float>(numChannels);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(sampleMutex);
-        samples[b][padIndex] = sample;
-    }
-
-    loopStartFrac[b][padIndex].store(0.0, std::memory_order_relaxed);
-    loopEndFrac[b][padIndex].store(1.0, std::memory_order_relaxed);
-
-    if (!dataDir.empty()) {
-        const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(padIndex) + ".wav";
-        FILE* f = std::fopen(path.c_str(), "wb");
-        if (f != nullptr) {
-            std::fwrite(bytes.data(), 1, bytes.size(), f);
-            std::fclose(f);
-        }
-    }
-
-    LOGI("Loaded sample bank %d pad %d, frames=%zu", b, padIndex, sample->data.size());
-    return true;
 }
 
 double AudioEngine::nextNoise(Voice& v) {
@@ -922,6 +966,9 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 } else {
                     v.loopEnabled = false;
                 }
+
+                v.playingSample.store(v.sample && !v.sample->data.empty(),
+                        std::memory_order_relaxed);
 
                 switch (type) {
                     case 0: v.decay = std::exp(-1.0 / (sampleRate * 0.35)); break;
