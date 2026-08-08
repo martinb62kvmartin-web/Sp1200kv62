@@ -1,11 +1,14 @@
 package com.example.sp1200
 
+import android.content.pm.PackageManager
 import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -49,6 +52,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.io.File
+import java.io.FileInputStream
+import org.json.JSONArray
+import org.json.JSONObject
 
 private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
     return this.toMutableList().also { outer ->
@@ -101,6 +108,11 @@ class MainActivity : ComponentActivity() {
     private external fun nativeMidiStart()
     private external fun nativeMidiStop()
     private external fun nativeGetMidiTicks(): Long
+    private external fun nativeSetDataDir(dir: String)
+    private external fun nativeGetCurrentStep(): Int
+    private external fun nativeGetPadHits(padIndex: Int): Long
+    private external fun nativeStartRecording(padIndex: Int): Boolean
+    private external fun nativeStopRecording(): Boolean
 
     private lateinit var midiManager: MidiManager
     private var midiDevice: MidiDevice? = null
@@ -111,6 +123,9 @@ class MainActivity : ComponentActivity() {
     private var clockRunning = false
     private var clockThread: Thread? = null
     private var lastTicks = 0L
+
+    private val pollHandler = Handler(Looper.getMainLooper())
+    private var prevHits = List(8) { 0L }
 
     private var pendingPad by mutableStateOf(-1)
     private var bank by mutableStateOf(0)
@@ -128,6 +143,10 @@ class MainActivity : ComponentActivity() {
     private var solos by mutableStateOf(List(8) { false })
     private var midiMode by mutableStateOf(0)
     private var midiDeviceName by mutableStateOf("none")
+    private var recording by mutableStateOf(false)
+    private var playhead by mutableStateOf(0)
+    private var pollTick by mutableStateOf(0)
+    private var hitTimes by mutableStateOf(List(8) { 0L })
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
@@ -162,6 +181,238 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private val recPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                startRec()
+            }
+        }
+
+    private fun startRec() {
+        if (nativeStartRecording(selectedPad)) {
+            recording = true
+            Toast.makeText(this, "Recording... press REC to stop", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun onRecToggle() {
+        if (recording) {
+            recording = false
+            val ok = nativeStopRecording()
+            if (ok) {
+                loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + selectedPad }
+                peaks = nativeGetPeaks(selectedPad, 200)
+                Toast.makeText(this, "Recorded to PAD ${selectedPad + 1}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                startRec()
+            } else {
+                recPermission.launch(android.Manifest.permission.RECORD_AUDIO)
+            }
+        }
+    }
+
+    private fun saveState() {
+        try {
+            val root = JSONObject()
+            root.put("bank", bank)
+            root.put("bpm", bpm)
+            root.put("swing", swing)
+            root.put("crunch", crunch)
+            root.put("gate", gateMode)
+            root.put("pitch", pitch)
+            root.put("mutes", JSONArray(mutes))
+            root.put("solos", JSONArray(solos))
+
+            val banksArr = JSONArray()
+            for (b in 0 until 4) {
+                val bo = JSONObject()
+                bo.put("patterns", JSONArray(patternBanks[b]))
+
+                val rollArr = JSONArray()
+                for (p in 0 until 8) {
+                    rollArr.put(JSONArray(rollBanks[b][p]))
+                }
+                bo.put("roll", rollArr)
+
+                val loopsArr = JSONArray()
+                for (p in 0 until 8) {
+                    val lo = JSONObject()
+                    lo.put("s", loopStartBanks[b][p])
+                    lo.put("e", loopEndBanks[b][p])
+                    lo.put("on", loopOnBanks[b][p])
+                    loopsArr.put(lo)
+                }
+                bo.put("loops", loopsArr)
+
+                val paramsArr = JSONArray()
+                for (p in 0 until 8) {
+                    val po = JSONObject()
+                    po.put("p", pitchBanks[b][p])
+                    po.put("a", attackBanks[b][p])
+                    po.put("d", decayBanks[b][p])
+                    po.put("s", sustainBanks[b][p])
+                    po.put("r", releaseBanks[b][p])
+                    paramsArr.put(po)
+                }
+                bo.put("params", paramsArr)
+
+                banksArr.put(bo)
+            }
+            root.put("banks", banksArr)
+
+            File(filesDir, "state.json").writeText(root.toString())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun loadState() {
+        try {
+            val f = File(filesDir, "state.json")
+            if (!f.exists()) return
+
+            val root = JSONObject(f.readText())
+            bank = root.optInt("bank", 0)
+            bpm = root.optDouble("bpm", 90.0).toFloat()
+            swing = root.optDouble("swing", 0.0).toFloat()
+            crunch = root.optBoolean("crunch", true)
+            gateMode = root.optBoolean("gate", false)
+            pitch = root.optDouble("pitch", 0.0).toFloat()
+
+            root.optJSONArray("mutes")?.let { m ->
+                mutes = (0 until 8).map { m.optBoolean(it, false) }
+            }
+            root.optJSONArray("solos")?.let { s ->
+                solos = (0 until 8).map { s.optBoolean(it, false) }
+            }
+
+            val banksArr = root.optJSONArray("banks") ?: return
+
+            val newPatterns = patternBanks.toMutableList()
+            val newRolls = rollBanks.toMutableList()
+            val newLS = loopStartBanks.toMutableList()
+            val newLE = loopEndBanks.toMutableList()
+            val newLO = loopOnBanks.toMutableList()
+            val newP = pitchBanks.toMutableList()
+            val newA = attackBanks.toMutableList()
+            val newD = decayBanks.toMutableList()
+            val newS = sustainBanks.toMutableList()
+            val newR = releaseBanks.toMutableList()
+
+            for (b in 0 until minOf(4, banksArr.length())) {
+                val bo = banksArr.optJSONObject(b) ?: continue
+
+                bo.optJSONArray("patterns")?.let { pat ->
+                    newPatterns[b] = (0 until 8).map { pat.optInt(it, 0) }
+                }
+
+                bo.optJSONArray("roll")?.let { ra ->
+                    val rows = rollBanks[b].toMutableList()
+                    for (p in 0 until minOf(8, ra.length())) {
+                        val st = ra.optJSONArray(p) ?: continue
+                        rows[p] = (0 until 16).map { st.optInt(it, 0) }
+                    }
+                    newRolls[b] = rows
+                }
+
+                bo.optJSONArray("loops")?.let { la ->
+                    for (p in 0 until minOf(8, la.length())) {
+                        val lo = la.optJSONObject(p) ?: continue
+                        newLS[b] = newLS[b].toMutableList().also { it[p] = lo.optDouble("s", 0.0).toFloat() }
+                        newLE[b] = newLE[b].toMutableList().also { it[p] = lo.optDouble("e", 100.0).toFloat() }
+                        newLO[b] = newLO[b].toMutableList().also { it[p] = lo.optBoolean("on", false) }
+                    }
+                }
+
+                bo.optJSONArray("params")?.let { pa ->
+                    for (p in 0 until minOf(8, pa.length())) {
+                        val po = pa.optJSONObject(p) ?: continue
+                        newP[b] = newP[b].toMutableList().also { it[p] = po.optDouble("p", 0.0).toFloat() }
+                        newA[b] = newA[b].toMutableList().also { it[p] = po.optDouble("a", 0.0).toFloat() }
+                        newD[b] = newD[b].toMutableList().also { it[p] = po.optDouble("d", 0.0).toFloat() }
+                        newS[b] = newS[b].toMutableList().also { it[p] = po.optDouble("s", 100.0).toFloat() }
+                        newR[b] = newR[b].toMutableList().also { it[p] = po.optDouble("r", 50.0).toFloat() }
+                    }
+                }
+            }
+
+            patternBanks = newPatterns
+            rollBanks = newRolls
+            loopStartBanks = newLS
+            loopEndBanks = newLE
+            loopOnBanks = newLO
+            pitchBanks = newP
+            attackBanks = newA
+            decayBanks = newD
+            sustainBanks = newS
+            releaseBanks = newR
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun pushAllToNative() {
+        nativeSetGateMode(gateMode)
+        nativeSetPitch(pitch)
+        nativeSetCrunch(crunch)
+        nativeSeqSetBpm(bpm)
+        nativeSeqSetSwing(swing / 100f)
+
+        for (p in 0 until 8) {
+            nativeSetMute(p, mutes[p])
+            nativeSetSolo(p, solos[p])
+        }
+
+        for (b in 0 until 4) {
+            nativeSetBank(b)
+            for (p in 0 until 8) {
+                nativeSeqSetMask(p, patternBanks[b][p])
+                for (st in 0 until 16) {
+                    val v = rollBanks[b][p][st]
+                    if (v != 0) nativeSetRoll(p, st, v)
+                }
+                nativeSetLoopPoints(p, loopStartBanks[b][p] / 100f, loopEndBanks[b][p] / 100f)
+                nativeSetLoopOn(p, loopOnBanks[b][p])
+                nativeSetPadParams(
+                    p,
+                    pitchBanks[b][p],
+                    attackBanks[b][p] / 1000f,
+                    decayBanks[b][p] / 1000f,
+                    sustainBanks[b][p] / 100f,
+                    releaseBanks[b][p] / 1000f
+                )
+            }
+        }
+
+        nativeSetBank(bank)
+    }
+
+    private fun restoreSamples() {
+        val dir = File(filesDir, "samples")
+        if (!dir.exists()) return
+
+        for (b in 0 until 4) {
+            nativeSetBank(b)
+            for (p in 0 until 8) {
+                val f = File(dir, "b${b}_p$p.wav")
+                if (f.exists()) {
+                    try {
+                        FileInputStream(f).use { fis ->
+                            if (nativeLoadSample(p, fis.fd)) {
+                                loadedBanks = loadedBanks.toMutableList().also { it[b] = it[b] + p }
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+
+        nativeSetBank(bank)
     }
 
     private fun teardownMidi() {
@@ -307,13 +558,22 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         nativeSetup()
+
+        val samplesDir = File(filesDir, "samples")
+        samplesDir.mkdirs()
+        nativeSetDataDir(samplesDir.absolutePath)
+
+        loadState()
+        pushAllToNative()
+        restoreSamples()
+
         midiManager = getSystemService(MIDI_SERVICE) as MidiManager
 
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFF111111)
+                    color = Color(0xFF141428)
                 ) {
                     Sp1200App(
                         onPadDown = { nativeTriggerPad(it) },
@@ -399,6 +659,10 @@ class MainActivity : ComponentActivity() {
                             }
                             nativeSetRoll(pad, step, value)
                         },
+                        playhead = playhead,
+                        flashes = hitTimes.map { System.currentTimeMillis() - it < 150 },
+                        recording = recording,
+                        onRecToggle = { onRecToggle() },
                         selectedPad = selectedPad,
                         onSelectPad = { pad ->
                             selectedPad = pad
@@ -471,10 +735,32 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         nativeStart()
+
+        pollHandler.post(object : Runnable {
+            override fun run() {
+                playhead = nativeGetCurrentStep()
+
+                val now = System.currentTimeMillis()
+                val newTimes = hitTimes.toMutableList()
+                for (i in 0 until 8) {
+                    val h = nativeGetPadHits(i)
+                    if (h != prevHits[i]) {
+                        newTimes[i] = now
+                        prevHits[i] = h
+                    }
+                }
+                hitTimes = newTimes
+                pollTick++
+
+                pollHandler.postDelayed(this, 50)
+            }
+        })
     }
 
     override fun onStop() {
         super.onStop()
+        pollHandler.removeCallbacksAndMessages(null)
+        saveState()
         nativeStop()
     }
 
@@ -554,6 +840,10 @@ fun Sp1200App(
     onMidiModeChange: () -> Unit,
     roll: List<List<Int>>,
     onToggleRollCell: (Int, Int, Int) -> Unit,
+    playhead: Int,
+    flashes: List<Boolean>,
+    recording: Boolean,
+    onRecToggle: () -> Unit,
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
@@ -583,6 +873,12 @@ fun Sp1200App(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        Text(
+            text = "SP-1200 Clone",
+            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF4FC3F7)
+        )
+
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             SmallButton("PADS", view == 0) { onViewChange(0) }
             SmallButton("SEQ", view == 1) { onViewChange(1) }
@@ -608,6 +904,7 @@ fun Sp1200App(
             listOf("A", "B", "C", "D").forEachIndexed { i, name ->
                 SmallButton(name, bank == i) { onBankChange(i) }
             }
+            SmallButton(if (recording) "REC*" else "REC", recording) { onRecToggle() }
         }
 
         Text(
@@ -671,7 +968,9 @@ fun Sp1200App(
                 mutes = mutes,
                 onMuteToggle = onMuteToggle,
                 solos = solos,
-                onSoloToggle = onSoloToggle
+                onSoloToggle = onSoloToggle,
+                playhead = playhead,
+                playing = playing
             )
 
             2 -> EditorView(
@@ -705,7 +1004,9 @@ fun Sp1200App(
                 onSelectPad = onSelectPad,
                 loadedPads = loadedPads,
                 roll = roll,
-                onToggleRollCell = onToggleRollCell
+                onToggleRollCell = onToggleRollCell,
+                playhead = playhead,
+                playing = playing
             )
 
             else -> {
@@ -727,6 +1028,7 @@ fun Sp1200App(
                         Pad(
                             index = index,
                             hasSample = loadedPads.contains(index),
+                            flash = flashes[index],
                             onPadDown = onPadDown,
                             onPadUp = onPadUp,
                             onPadLongPress = onPadLongPress
@@ -744,7 +1046,9 @@ fun RollView(
     onSelectPad: (Int) -> Unit,
     loadedPads: Set<Int>,
     roll: List<List<Int>>,
-    onToggleRollCell: (Int, Int, Int) -> Unit
+    onToggleRollCell: (Int, Int, Int) -> Unit,
+    playhead: Int,
+    playing: Boolean
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -809,7 +1113,11 @@ fun RollView(
 
                 for (step in 0 until 16) {
                     val on = roll[selectedPad][step] == enc
-                    val offColor = if (step % 4 == 0) Color(0xFF3A3A3A) else Color(0xFF262626)
+                    val offColor = when {
+                        playing && step == playhead -> Color(0xFF5A5A7A)
+                        step % 4 == 0 -> Color(0xFF3A3A3A)
+                        else -> Color(0xFF262626)
+                    }
 
                     Box(
                         modifier = Modifier
@@ -834,7 +1142,9 @@ fun SequencerGrid(
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
-    onSoloToggle: (Int) -> Unit
+    onSoloToggle: (Int) -> Unit,
+    playhead: Int,
+    playing: Boolean
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -876,7 +1186,11 @@ fun SequencerGrid(
 
                 for (step in 0 until 16) {
                     val on = (pattern[pad] ushr step) and 1 == 1
-                    val offColor = if (step % 4 == 0) Color(0xFF3A3A3A) else Color(0xFF262626)
+                    val offColor = when {
+                        playing && step == playhead -> Color(0xFF5A5A7A)
+                        step % 4 == 0 -> Color(0xFF3A3A3A)
+                        else -> Color(0xFF262626)
+                    }
 
                     Box(
                         modifier = Modifier
@@ -1143,6 +1457,7 @@ fun EditorView(
 fun Pad(
     index: Int,
     hasSample: Boolean,
+    flash: Boolean,
     onPadDown: (Int) -> Unit,
     onPadUp: (Int) -> Unit,
     onPadLongPress: (Int) -> Unit
@@ -1152,7 +1467,7 @@ fun Pad(
             .fillMaxWidth()
             .aspectRatio(1f)
             .clip(RoundedCornerShape(20.dp))
-            .background(padColor(index))
+            .background(if (flash) Color.White else padColor(index))
             .pointerInput(index) {
                 detectTapGestures(
                     onPress = {
