@@ -1,4 +1,5 @@
 #include <jni.h>
+#include <string>
 #include "audio_engine.h"
 
 static AudioEngine* engine = nullptr;
@@ -216,6 +217,50 @@ Java_com_example_sp1200_MainActivity_nativeGetMidiTicks(JNIEnv*, jobject) {
         return 0;
     }
     return static_cast<jlong>(engine->getMidiTicksOut());
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetDataDir(JNIEnv* env, jobject, jstring dir) {
+    if (engine == nullptr) {
+        return;
+    }
+    const char* s = env->GetStringUTFChars(dir, nullptr);
+    if (s != nullptr) {
+        engine->setDataDir(std::string(s));
+        env->ReleaseStringUTFChars(dir, s);
+    }
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetCurrentStep(JNIEnv*, jobject) {
+    if (engine == nullptr) {
+        return 0;
+    }
+    return static_cast<jint>(engine->getCurrentStep());
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetPadHits(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) {
+        return 0;
+    }
+    return static_cast<jlong>(engine->getPadHits(padIndex));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeStartRecording(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return engine->startRecording(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeStopRecording(JNIEnv*, jobject) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return engine->stopRecording() ? JNI_TRUE : JNI_FALSE;
 }
 
 }
