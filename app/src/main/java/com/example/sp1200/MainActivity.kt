@@ -98,7 +98,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
     private external fun nativeSeqSetMask(padIndex: Int, mask: Int)
-    private external fun nativeSetRoll(padIndex: Int, step: Int, value: Int)
+    private external fun nativeSetRoll(padIndex: Int, step: Int, value: Int, len: Int)
     private external fun nativeSetLoopPoints(padIndex: Int, startFrac: Float, endFrac: Float)
     private external fun nativeSetLoopOn(padIndex: Int, enabled: Boolean)
     private external fun nativeTrimToLoop(padIndex: Int): Boolean
@@ -147,6 +147,8 @@ class MainActivity : ComponentActivity() {
     private var swing by mutableStateOf(0f)
     private var patternBanks by mutableStateOf(List(4) { List(8) { 0 } })
     private var rollBanks by mutableStateOf(List(4) { List(8) { List(16) { 0 } } })
+    private var rollLenBanks by mutableStateOf(List(4) { List(8) { List(16) { 0 } } })
+    private var noteLen by mutableStateOf(1)
     private var mutes by mutableStateOf(List(8) { false })
     private var solos by mutableStateOf(List(8) { false })
     private var midiMode by mutableStateOf(0)
@@ -585,10 +587,13 @@ class MainActivity : ComponentActivity() {
                 bo.put("patterns", JSONArray(patternBanks[b]))
 
                 val rollArr = JSONArray()
+                val rollLenArr = JSONArray()
                 for (p in 0 until 8) {
                     rollArr.put(JSONArray(rollBanks[b][p]))
+                    rollLenArr.put(JSONArray(rollLenBanks[b][p]))
                 }
                 bo.put("roll", rollArr)
+                bo.put("rolllen", rollLenArr)
 
                 val loopsArr = JSONArray()
                 for (p in 0 until 8) {
@@ -645,6 +650,7 @@ class MainActivity : ComponentActivity() {
 
             val newPatterns = patternBanks.toMutableList()
             val newRolls = rollBanks.toMutableList()
+            val newRollLens = rollLenBanks.toMutableList()
             val newLS = loopStartBanks.toMutableList()
             val newLE = loopEndBanks.toMutableList()
             val newLO = loopOnBanks.toMutableList()
@@ -670,6 +676,15 @@ class MainActivity : ComponentActivity() {
                     newRolls[b] = rows
                 }
 
+                bo.optJSONArray("rolllen")?.let { ra ->
+                    val rows = rollLenBanks[b].toMutableList()
+                    for (p in 0 until minOf(8, ra.length())) {
+                        val st = ra.optJSONArray(p) ?: continue
+                        rows[p] = (0 until 16).map { st.optInt(it, 0) }
+                    }
+                    newRollLens[b] = rows
+                }
+
                 bo.optJSONArray("loops")?.let { la ->
                     for (p in 0 until minOf(8, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
@@ -693,6 +708,7 @@ class MainActivity : ComponentActivity() {
 
             patternBanks = newPatterns
             rollBanks = newRolls
+            rollLenBanks = newRollLens
             loopStartBanks = newLS
             loopEndBanks = newLE
             loopOnBanks = newLO
@@ -722,8 +738,7 @@ class MainActivity : ComponentActivity() {
             for (p in 0 until 8) {
                 nativeSeqSetMask(p, patternBanks[b][p])
                 for (st in 0 until 16) {
-                    val v = rollBanks[b][p][st]
-                    if (v != 0) nativeSetRoll(p, st, v)
+                    nativeSetRoll(p, st, rollBanks[b][p][st], rollLenBanks[b][p][st])
                 }
                 nativeSetLoopPoints(p, loopStartBanks[b][p] / 100f, loopEndBanks[b][p] / 100f)
                 nativeSetLoopOn(p, loopOnBanks[b][p])
@@ -1008,13 +1023,52 @@ class MainActivity : ComponentActivity() {
                             applyMidiMode(next)
                         },
                         roll = rollBanks[bank],
-                        onToggleRollCell = { pad, step, value ->
-                            rollBanks = rollBanks.toMutableList().also { outer ->
-                                outer[bank] = outer[bank].toMutableList().also { mid ->
-                                    mid[pad] = mid[pad].toMutableList().also { it[step] = value }
+                        rollLens = rollLenBanks[bank],
+                        noteLen = noteLen,
+                        onNoteLenCycle = {
+                            noteLen = when (noteLen) {
+                                1 -> 2
+                                2 -> 4
+                                else -> 1
+                            }
+                        },
+                        onToggleRollCell = { pad, step, enc ->
+                            val row = rollBanks[bank][pad]
+                            val rowLen = rollLenBanks[bank][pad]
+
+                            var start = -1
+                            if (row[step] != 0) {
+                                start = step
+                            } else {
+                                for (s0 in 0 until step) {
+                                    if (row[s0] != 0 && step < s0 + rowLen[s0]) {
+                                        start = s0
+                                        break
+                                    }
                                 }
                             }
-                            nativeSetRoll(pad, step, value)
+
+                            if (start >= 0) {
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[start] = 0 }
+                                )
+                                rollLenBanks = rollLenBanks.set2(
+                                    bank, pad,
+                                    rollLenBanks[bank][pad].toMutableList().also { it[start] = 0 }
+                                )
+                                nativeSetRoll(pad, start, 0, 1)
+                            } else {
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = enc }
+                                )
+                                rollLenBanks = rollLenBanks.set2(
+                                    bank, pad,
+                                    rollLenBanks[bank][pad].toMutableList().also { it[step] = noteLen }
+                                )
+                                nativeSetRoll(pad, step, enc, noteLen)
+                            }
                         },
                         onAudition = { pad, semi -> auditionPitch(pad, semi) },
                         playhead = playhead,
@@ -1201,6 +1255,9 @@ fun Sp1200App(
     midiDeviceName: String,
     onMidiModeChange: () -> Unit,
     roll: List<List<Int>>,
+    rollLens: List<List<Int>>,
+    noteLen: Int,
+    onNoteLenCycle: () -> Unit,
     onToggleRollCell: (Int, Int, Int) -> Unit,
     onAudition: (Int, Int) -> Unit,
     playhead: Int,
@@ -1373,6 +1430,9 @@ fun Sp1200App(
                     onSelectPad = onSelectPad,
                     loadedPads = loadedPads,
                     roll = roll,
+                    rollLens = rollLens,
+                    noteLen = noteLen,
+                    onNoteLenCycle = onNoteLenCycle,
                     onToggleRollCell = onToggleRollCell,
                     onAudition = onAudition,
                     playhead = playhead,
@@ -1496,40 +1556,39 @@ fun LibView(
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(files.size) { i ->
-                    val name = files[i]
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(files.size) { i ->
+                val name = files[i]
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (armedFile == name) Color(0xFFE91E5A) else Color(0xFF262636))
-                            .pointerInput(name) {
-                                detectTapGestures(
-                                    onTap = {
-                                        if (armedFile == name) {
-                                            armedFile = null
-                                        } else {
-                                            onPreview(name)
-                                        }
-                                    },
-                                    onLongPress = {
-                                        armedFile = name
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (armedFile == name) Color(0xFFE91E5A) else Color(0xFF262636))
+                        .pointerInput(name) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (armedFile == name) {
+                                        armedFile = null
+                                    } else {
+                                        onPreview(name)
                                     }
-                                )
-                            },
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        Text(
-                            text = name,
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                    }
+                                },
+                                onLongPress = {
+                                    armedFile = name
+                                }
+                            )
+                        },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text(
+                        text = name,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
                 }
             }
         }
@@ -1542,6 +1601,9 @@ fun RollView(
     onSelectPad: (Int) -> Unit,
     loadedPads: Set<Int>,
     roll: List<List<Int>>,
+    rollLens: List<List<Int>>,
+    noteLen: Int,
+    onNoteLenCycle: () -> Unit,
     onToggleRollCell: (Int, Int, Int) -> Unit,
     onAudition: (Int, Int) -> Unit,
     playhead: Int,
@@ -1580,46 +1642,72 @@ fun RollView(
             }
         }
 
-        Text(
-            text = "ROLL: tap key = hear note, tap cell = place note",
-            color = Color(0xFF888888),
-            style = MaterialTheme.typography.bodySmall
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = onNoteLenCycle) { Text("LEN $noteLen") }
+            Text(
+                text = "Tap key = hear. Tap cell = note. Tap note = delete",
+                color = Color(0xFF888888),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1
+            )
+        }
 
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             items(25) { r ->
                 val pitchOff = 12 - r
                 val enc = pitchOff + 13
 
+                val row = roll[selectedPad]
+                val rowLen = rollLens[selectedPad]
+
+                val cover = IntArray(16) { -1 }
+                for (s0 in 0 until 16) {
+                    if (row[s0] != 0) {
+                        val L = rowLen[s0]
+                        for (s in s0 until minOf(16, s0 + L)) {
+                            if (cover[s] == -1) cover[s] = s0
+                        }
+                    }
+                }
+
+                val pc = ((pitchOff % 12) + 12) % 12
+                val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(28.dp)
-                            .height(22.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF3A3A5A))
+                            .width(26.dp)
+                            .height(20.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(if (blackKey) Color(0xFF1A1A2E) else Color(0xFFDDDDEE))
                             .clickable { onAudition(selectedPad, pitchOff) },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
-                            color = Color.White,
-                            fontSize = 8.sp
+                            color = if (blackKey) Color.White else Color.Black,
+                            fontSize = 7.sp
                         )
                     }
 
                     for (step in 0 until 16) {
-                        val on = roll[selectedPad][step] == enc
-                        val offColor = when {
+                        val isNote = cover[step] >= 0
+                        val isStart = cover[step] == step
+
+                        val bg = when {
+                            isNote -> padColor(selectedPad)
                             playing && step == playhead -> Color(0xFF5A5A7A)
                             step % 4 == 0 -> Color(0xFF3A3A3A)
                             else -> Color(0xFF262626)
@@ -1628,13 +1716,22 @@ fun RollView(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(22.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(if (on) padColor(selectedPad) else offColor)
+                                .height(20.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(bg)
                                 .clickable {
-                                    onToggleRollCell(selectedPad, step, if (on) 0 else enc)
+                                    onToggleRollCell(selectedPad, step, enc)
                                 }
-                        )
+                        ) {
+                            if (isStart) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(3.dp)
+                                        .background(Color(0xFFFFFFFF))
+                                )
+                            }
+                        }
                     }
                 }
             }
