@@ -218,7 +218,11 @@ class MainActivity : ComponentActivity() {
             val port = device.openOutputPort(0)
 
             if (port != null) {
-                port.setReceiver(midiReceiver)
+                try {
+                    val m = port.javaClass.getMethod("setReceiver", MidiReceiver::class.java)
+                    m.invoke(port, midiReceiver)
+                } catch (_: Exception) {
+                }
                 closePortsFn = {
                     try {
                         port.close()
