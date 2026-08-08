@@ -35,6 +35,7 @@ public:
     void setSeqBpm(double bpm);
     void setSeqSwing(double swing);
     void setSeqMask(int padIndex, int mask);
+    void setRoll(int padIndex, int step, int value);
 
     void setLoopPoints(int padIndex, double startFrac, double endFrac);
     void setLoopOn(int padIndex, bool enabled);
@@ -78,6 +79,8 @@ private:
         double loopStart = 0.0;
         double loopEnd = 0.0;
 
+        std::atomic<double> nextPitchAdd{0.0};
+        double pitchAddSemi = 0.0;
         double rate = 1.0;
         double aT = 0.0;
         double dT = 0.0;
@@ -100,7 +103,7 @@ private:
 
     double renderVoice(Voice& voice);
     double nextNoise(Voice& voice);
-    void triggerVoice(int padIndex);
+    void triggerVoice(int padIndex, double semiAdd);
     void fireStep(int step);
 
     std::shared_ptr<oboe::AudioStream> outputStream;
@@ -121,6 +124,7 @@ private:
     std::atomic<double> seqBpm{90.0};
     std::atomic<double> seqSwing{0.0};
     std::array<std::array<std::atomic<int>, kNumPads>, kBanks> seqMask{};
+    std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollPitch{};
     double totalFrames = 0.0;
     double nextStepFrame = 0.0;
     double nextTickFrame = 0.0;
