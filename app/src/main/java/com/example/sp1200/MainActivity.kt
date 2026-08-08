@@ -66,6 +66,14 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetLoopOn(padIndex: Int, enabled: Boolean)
     private external fun nativeTrimToLoop(padIndex: Int): Boolean
     private external fun nativeGetPeaks(padIndex: Int, buckets: Int): FloatArray
+    private external fun nativeSetPadParams(
+        padIndex: Int,
+        pitch: Float,
+        attack: Float,
+        decay: Float,
+        sustain: Float,
+        release: Float
+    )
 
     private var pendingPad by mutableStateOf(-1)
     private var loadedPads by mutableStateOf(setOf<Int>())
@@ -82,6 +90,23 @@ class MainActivity : ComponentActivity() {
     private var loopStarts by mutableStateOf(List(8) { 0f })
     private var loopEnds by mutableStateOf(List(8) { 100f })
     private var loopOns by mutableStateOf(List(8) { false })
+
+    private var padPitchList by mutableStateOf(List(8) { 0f })
+    private var padAttackList by mutableStateOf(List(8) { 0f })
+    private var padDecayList by mutableStateOf(List(8) { 0f })
+    private var padSustainList by mutableStateOf(List(8) { 100f })
+    private var padReleaseList by mutableStateOf(List(8) { 50f })
+
+    private fun pushPadParams(pad: Int) {
+        nativeSetPadParams(
+            pad,
+            padPitchList[pad],
+            padAttackList[pad] / 1000f,
+            padDecayList[pad] / 1000f,
+            padSustainList[pad] / 100f,
+            padReleaseList[pad] / 1000f
+        )
+    }
 
     private val pickSample =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -195,7 +220,32 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onPlayDown = { nativeTriggerPad(selectedPad) },
-                        onPlayUp = { nativePadRelease(selectedPad) }
+                        onPlayUp = { nativePadRelease(selectedPad) },
+                        padPitch = padPitchList[selectedPad],
+                        onPadPitch = { value ->
+                            padPitchList = padPitchList.toMutableList().also { it[selectedPad] = value }
+                            pushPadParams(selectedPad)
+                        },
+                        padAttack = padAttackList[selectedPad],
+                        onPadAttack = { value ->
+                            padAttackList = padAttackList.toMutableList().also { it[selectedPad] = value }
+                            pushPadParams(selectedPad)
+                        },
+                        padDecay = padDecayList[selectedPad],
+                        onPadDecay = { value ->
+                            padDecayList = padDecayList.toMutableList().also { it[selectedPad] = value }
+                            pushPadParams(selectedPad)
+                        },
+                        padSustain = padSustainList[selectedPad],
+                        onPadSustain = { value ->
+                            padSustainList = padSustainList.toMutableList().also { it[selectedPad] = value }
+                            pushPadParams(selectedPad)
+                        },
+                        padReleaseMs = padReleaseList[selectedPad],
+                        onPadReleaseMs = { value ->
+                            padReleaseList = padReleaseList.toMutableList().also { it[selectedPad] = value }
+                            pushPadParams(selectedPad)
+                        }
                     )
                 }
             }
@@ -260,7 +310,17 @@ fun Sp1200App(
     onLoopToggle: () -> Unit,
     onTrim: () -> Unit,
     onPlayDown: () -> Unit,
-    onPlayUp: () -> Unit
+    onPlayUp: () -> Unit,
+    padPitch: Float,
+    onPadPitch: (Float) -> Unit,
+    padAttack: Float,
+    onPadAttack: (Float) -> Unit,
+    padDecay: Float,
+    onPadDecay: (Float) -> Unit,
+    padSustain: Float,
+    onPadSustain: (Float) -> Unit,
+    padReleaseMs: Float,
+    onPadReleaseMs: (Float) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -356,7 +416,17 @@ fun Sp1200App(
                 onLoopToggle = onLoopToggle,
                 onTrim = onTrim,
                 onPlayDown = onPlayDown,
-                onPlayUp = onPlayUp
+                onPlayUp = onPlayUp,
+                padPitch = padPitch,
+                onPadPitch = onPadPitch,
+                padAttack = padAttack,
+                onPadAttack = onPadAttack,
+                padDecay = padDecay,
+                onPadDecay = onPadDecay,
+                padSustain = padSustain,
+                onPadSustain = onPadSustain,
+                padReleaseMs = padReleaseMs,
+                onPadReleaseMs = onPadReleaseMs
             )
 
             else -> {
@@ -435,7 +505,17 @@ fun EditorView(
     onLoopToggle: () -> Unit,
     onTrim: () -> Unit,
     onPlayDown: () -> Unit,
-    onPlayUp: () -> Unit
+    onPlayUp: () -> Unit,
+    padPitch: Float,
+    onPadPitch: (Float) -> Unit,
+    padAttack: Float,
+    onPadAttack: (Float) -> Unit,
+    padDecay: Float,
+    onPadDecay: (Float) -> Unit,
+    padSustain: Float,
+    onPadSustain: (Float) -> Unit,
+    padReleaseMs: Float,
+    onPadReleaseMs: (Float) -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -473,7 +553,7 @@ fun EditorView(
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .height(100.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color(0xFF1E1E1E))
         ) {
@@ -507,67 +587,153 @@ fun EditorView(
             }
         }
 
-        Column {
-            Text(
-                text = "LOOP START ${loopStart.toInt()}%",
-                color = Color.White,
-                style = MaterialTheme.typography.bodySmall
-            )
-            Slider(
-                value = loopStart,
-                onValueChange = onLoopStart,
-                valueRange = 0f..100f
-            )
-        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "LOOP START ${loopStart.toInt()}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = loopStart,
+                    onValueChange = onLoopStart,
+                    valueRange = 0f..100f
+                )
+            }
 
-        Column {
-            Text(
-                text = "LOOP END ${loopEnd.toInt()}%",
-                color = Color.White,
-                style = MaterialTheme.typography.bodySmall
-            )
-            Slider(
-                value = loopEnd,
-                onValueChange = onLoopEnd,
-                valueRange = 0f..100f
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "LOOP END ${loopEnd.toInt()}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = loopEnd,
+                    onValueChange = onLoopEnd,
+                    valueRange = 0f..100f
+                )
+            }
         }
 
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Button(onClick = onLoopToggle) {
-                Text(if (loopOn) "LOOP ON" else "LOOP OFF")
-            }
-
-            Button(onClick = onTrim) {
-                Text("TRIM")
-            }
-
-            Box(
-                modifier = Modifier
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color(0xFF4FC3F7))
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onPress = {
-                                onPlayDown()
-                                tryAwaitRelease()
-                                onPlayUp()
-                            }
-                        )
-                    },
-                contentAlignment = Alignment.Center
-            ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "PLAY (hold)",
-                    color = Color.Black,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(horizontal = 16.dp)
+                    text = "PITCH ${padPitch.toInt()} st",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padPitch,
+                    onValueChange = onPadPitch,
+                    valueRange = -12f..12f,
+                    steps = 23
                 )
             }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "ATTACK ${padAttack.toInt()} ms",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padAttack,
+                    onValueChange = onPadAttack,
+                    valueRange = 0f..500f
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "DECAY ${padDecay.toInt()} ms",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padDecay,
+                    onValueChange = onPadDecay,
+                    valueRange = 0f..1000f
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "SUSTAIN ${padSustain.toInt()}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padSustain,
+                    onValueChange = onPadSustain,
+                    valueRange = 0f..100f
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "RELEASE ${padReleaseMs.toInt()} ms",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padReleaseMs,
+                    onValueChange = onPadReleaseMs,
+                    valueRange = 0f..1000f
+                )
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(onClick = onLoopToggle) {
+                    Text(if (loopOn) "LOOP ON" else "LOOP OFF")
+                }
+
+                Button(onClick = onTrim) {
+                    Text("TRIM")
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF4FC3F7))
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            onPlayDown()
+                            tryAwaitRelease()
+                            onPlayUp()
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "PLAY (hold)",
+                color = Color.Black,
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
