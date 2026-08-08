@@ -177,6 +177,18 @@ void AudioEngine::setPadParams(int padIndex, double pitchSemi, double attack,
     padR[b][padIndex].store(clampd(release, 0.0, 3.0), std::memory_order_relaxed);
 }
 
+void AudioEngine::setRoll(int padIndex, int step, int value) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+    if (step < 0 || step >= kSteps) {
+        return;
+    }
+
+    const int b = currentBank.load(std::memory_order_relaxed);
+    rollPitch[b][padIndex][step].store(value, std::memory_order_relaxed);
+}
+
 void AudioEngine::padRelease(int padIndex) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
@@ -325,7 +337,7 @@ std::vector<float> AudioEngine::getPeaks(int padIndex, int buckets) {
     return out;
 }
 
-void AudioEngine::triggerVoice(int padIndex) {
+void AudioEngine::triggerVoice(int padIndex, double semiAdd) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
     }
@@ -350,6 +362,7 @@ void AudioEngine::triggerVoice(int padIndex) {
     }
 
     voice.bank = b;
+    voice.nextPitchAdd.store(semiAdd, std::memory_order_relaxed);
     voice.gateClosed.store(false, std::memory_order_relaxed);
     voice.type.store(padIndex, std::memory_order_relaxed);
     voice.hasNextSample.store(true, std::memory_order_relaxed);
@@ -361,7 +374,7 @@ void AudioEngine::triggerPad(int padIndex) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
     }
-    triggerVoice(padIndex);
+    triggerVoice(padIndex, 0.0);
 }
 
 void AudioEngine::fireStep(int step) {
@@ -370,7 +383,12 @@ void AudioEngine::fireStep(int step) {
     for (int p = 0; p < kNumPads; ++p) {
         const int m = seqMask[b][p].load(std::memory_order_relaxed);
         if ((m & (1 << step)) != 0) {
-            triggerVoice(p);
+            triggerVoice(p, 0.0);
+        }
+
+        const int rp = rollPitch[b][p][step].load(std::memory_order_relaxed);
+        if (rp != 0) {
+            triggerVoice(p, static_cast<double>(rp - 13));
         }
     }
 }
@@ -684,7 +702,9 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.pos = 0.0;
                 v.rng = 123456789u + static_cast<uint32_t>(type) * 999983u;
 
-                v.rate = std::pow(2.0, padPitch[b][type].load(std::memory_order_relaxed) / 12.0);
+                v.pitchAddSemi = v.nextPitchAdd.load(std::memory_order_relaxed);
+                v.rate = std::pow(2.0,
+                        (padPitch[b][type].load(std::memory_order_relaxed) + v.pitchAddSemi) / 12.0);
                 v.aT = padA[b][type].load(std::memory_order_relaxed);
                 v.dT = padD[b][type].load(std::memory_order_relaxed);
                 v.sL = padS[b][type].load(std::memory_order_relaxed);
