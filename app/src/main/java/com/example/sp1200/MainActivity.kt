@@ -79,6 +79,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
     private external fun nativeSeqSetMask(padIndex: Int, mask: Int)
+    private external fun nativeSetRoll(padIndex: Int, step: Int, value: Int)
     private external fun nativeSetLoopPoints(padIndex: Int, startFrac: Float, endFrac: Float)
     private external fun nativeSetLoopOn(padIndex: Int, enabled: Boolean)
     private external fun nativeTrimToLoop(padIndex: Int): Boolean
@@ -118,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private var bpm by mutableStateOf(90f)
     private var swing by mutableStateOf(0f)
     private var patternBanks by mutableStateOf(List(4) { List(8) { 0 } })
+    private var rollBanks by mutableStateOf(List(4) { List(8) { List(16) { 0 } } })
     private var mutes by mutableStateOf(List(8) { false })
     private var solos by mutableStateOf(List(8) { false })
     private var midiMode by mutableStateOf(0)
@@ -384,6 +386,15 @@ class MainActivity : ComponentActivity() {
                             midiMode = next
                             applyMidiMode(next)
                         },
+                        roll = rollBanks[bank],
+                        onToggleRollCell = { pad, step, value ->
+                            rollBanks = rollBanks.toMutableList().also { outer ->
+                                outer[bank] = outer[bank].toMutableList().also { mid ->
+                                    mid[pad] = mid[pad].toMutableList().also { it[step] = value }
+                                }
+                            }
+                            nativeSetRoll(pad, step, value)
+                        },
                         selectedPad = selectedPad,
                         onSelectPad = { pad ->
                             selectedPad = pad
@@ -512,6 +523,8 @@ fun Sp1200App(
     midiMode: Int,
     midiDeviceName: String,
     onMidiModeChange: () -> Unit,
+    roll: List<List<Int>>,
+    onToggleRollCell: (Int, Int, Int) -> Unit,
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
@@ -554,6 +567,7 @@ fun Sp1200App(
             Button(onClick = { onViewChange(0) }) { Text("PADS") }
             Button(onClick = { onViewChange(1) }) { Text("SEQ") }
             Button(onClick = { onViewChange(2) }) { Text("EDIT") }
+            Button(onClick = { onViewChange(3) }) { Text("ROLL") }
             Button(onClick = onPlayToggle) {
                 Text(if (playing) "STOP" else "PLAY")
             }
@@ -675,6 +689,14 @@ fun Sp1200App(
                 onPadReleaseMs = onPadReleaseMs
             )
 
+            3 -> RollView(
+                selectedPad = selectedPad,
+                onSelectPad = onSelectPad,
+                loadedPads = loadedPads,
+                roll = roll,
+                onToggleRollCell = onToggleRollCell
+            )
+
             else -> {
                 Text(
                     text = "Tap = play. Long press = load WAV. Bank: ${'A' + bank}",
@@ -699,6 +721,95 @@ fun Sp1200App(
                             onPadLongPress = onPadLongPress
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RollView(
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit,
+    loadedPads: Set<Int>,
+    roll: List<List<Int>>,
+    onToggleRollCell: (Int, Int, Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (pad in 0 until 8) {
+                val bg = when {
+                    pad == selectedPad -> Color.White
+                    loadedPads.contains(pad) -> padColor(pad)
+                    else -> Color(0xFF2A2A2A)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(bg)
+                        .clickable { onSelectPad(pad) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "${pad + 1}",
+                        color = if (pad == selectedPad) Color.Black else Color.White,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        Text(
+            text = "ROLL: notes play selected pad at row pitch (+6..-5)",
+            color = Color(0xFF888888),
+            style = MaterialTheme.typography.bodySmall
+        )
+
+        for (r in 0 until 12) {
+            val pitchOff = 6 - r
+            val enc = pitchOff + 13
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(22.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
+                        color = Color(0xFF888888),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                for (step in 0 until 16) {
+                    val on = roll[selectedPad][step] == enc
+                    val offColor = if (step % 4 == 0) Color(0xFF3A3A3A) else Color(0xFF262626)
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(22.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (on) padColor(selectedPad) else offColor)
+                            .clickable {
+                                onToggleRollCell(selectedPad, step, if (on) 0 else enc)
+                            }
+                    )
                 }
             }
         }
