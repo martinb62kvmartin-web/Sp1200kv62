@@ -23,6 +23,11 @@ AudioEngine::AudioEngine() {
     for (auto& f : loopStartFrac) f.store(0.0);
     for (auto& f : loopEndFrac) f.store(1.0);
     for (auto& f : loopOn) f.store(false);
+    for (auto& f : padPitch) f.store(0.0);
+    for (auto& f : padA) f.store(0.0);
+    for (auto& f : padD) f.store(0.0);
+    for (auto& f : padS) f.store(1.0);
+    for (auto& f : padR) f.store(0.05);
 }
 
 AudioEngine::~AudioEngine() {
@@ -53,8 +58,6 @@ bool AudioEngine::start() {
     if (sampleRate <= 0.0) {
         sampleRate = 48000.0;
     }
-
-    releaseFactor = std::exp(-1.0 / (sampleRate * 0.01));
 
     int32_t burst = outputStream->getFramesPerBurst();
     if (burst > 0) {
@@ -96,6 +99,19 @@ void AudioEngine::setGateMode(bool enabled) {
 
 void AudioEngine::setPitchSemitones(double semitones) {
     pitchRate.store(std::pow(2.0, semitones / 12.0), std::memory_order_relaxed);
+}
+
+void AudioEngine::setPadParams(int padIndex, double pitchSemi, double attack,
+                               double decay, double sustain, double release) {
+    if (padIndex < 0 || padIndex >= kNumPads) {
+        return;
+    }
+
+    padPitch[padIndex].store(clampd(pitchSemi, -24.0, 24.0), std::memory_order_relaxed);
+    padA[padIndex].store(clampd(attack, 0.0, 2.0), std::memory_order_relaxed);
+    padD[padIndex].store(clampd(decay, 0.0, 3.0), std::memory_order_relaxed);
+    padS[padIndex].store(clampd(sustain, 0.0, 1.0), std::memory_order_relaxed);
+    padR[padIndex].store(clampd(release, 0.0, 3.0), std::memory_order_relaxed);
 }
 
 void AudioEngine::padRelease(int padIndex) {
@@ -370,7 +386,7 @@ double AudioEngine::nextNoise(Voice& v) {
 }
 
 double AudioEngine::renderVoice(Voice& v) {
-    const double rate = pitchRate.load(std::memory_order_relaxed);
+    const double rate = pitchRate.load(std::memory_order_relaxed) * v.rate;
 
     if (v.sample && !v.sample->data.empty()) {
         const std::vector<float>& d = v.sample->data;
@@ -483,6 +499,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         swingOff = seqSwing.load(std::memory_order_relaxed) * fps;
     }
 
+    const double dt = 1.0 / sampleRate;
+
     for (int32_t frame = 0; frame < numFrames; ++frame) {
         const double absolute = totalFrames + static_cast<double>(frame);
 
@@ -532,8 +550,19 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.pos = 0.0;
                 v.rng = 123456789u + static_cast<uint32_t>(type) * 999983u;
 
+                const int pad = v.padIndex;
+                v.rate = std::pow(2.0, padPitch[pad].load(std::memory_order_relaxed) / 12.0);
+                v.aT = padA[pad].load(std::memory_order_relaxed);
+                v.dT = padD[pad].load(std::memory_order_relaxed);
+                v.sL = padS[pad].load(std::memory_order_relaxed);
+                v.rT = padR[pad].load(std::memory_order_relaxed);
+
+                v.envLevel = (v.aT <= 0.001) ? 1.0 : 0.0;
+                v.envStage = (v.aT <= 0.001) ? 1 : 0;
+                v.relStart = 0.0;
+                v.relTime = 0.0;
+
                 if (v.sample && !v.sample->data.empty()) {
-                    const int pad = v.padIndex;
                     v.loopEnabled = loopOn[pad].load(std::memory_order_relaxed);
                     const double sz = static_cast<double>(v.sample->data.size());
                     v.loopStart = loopStartFrac[pad].load(std::memory_order_relaxed) * sz;
@@ -555,16 +584,58 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 }
             }
 
-            if (v.amp < 0.0005) {
+            if (v.gateClosed.load(std::memory_order_relaxed) && v.envStage < 3) {
+                v.envStage = 3;
+                v.relStart = v.envLevel;
+                v.relTime = 0.0;
+            }
+
+            switch (v.envStage) {
+                case 0:
+                    v.envLevel += dt / v.aT;
+                    if (v.envLevel >= 1.0) {
+                        v.envLevel = 1.0;
+                        v.envStage = 1;
+                    }
+                    break;
+                case 1:
+                    if (v.dT <= 0.001) {
+                        v.envLevel = v.sL;
+                        v.envStage = 2;
+                    } else {
+                        v.envLevel -= dt * (1.0 - v.sL) / v.dT;
+                        if (v.envLevel <= v.sL) {
+                            v.envLevel = v.sL;
+                            v.envStage = 2;
+                        }
+                    }
+                    break;
+                case 2:
+                    v.envLevel = v.sL;
+                    break;
+                case 3:
+                    v.relTime += dt;
+                    if (v.rT <= 0.001) {
+                        v.envLevel = 0.0;
+                    } else {
+                        const double k = v.relStart * (1.0 - v.relTime / v.rT);
+                        v.envLevel = (k > 0.0) ? k : 0.0;
+                    }
+                    break;
+                default:
+                    break;
+            }
+
+            const bool envDone = (v.envStage == 3 && v.envLevel <= 0.0);
+
+            if (v.amp < 0.0005 || envDone) {
                 v.active.store(false, std::memory_order_relaxed);
                 continue;
             }
 
-            mix += static_cast<float>(renderVoice(v));
+            mix += static_cast<float>(renderVoice(v) * v.envLevel);
 
-            if (v.gateClosed.load(std::memory_order_relaxed)) {
-                v.amp *= releaseFactor;
-            } else if (!v.sample || v.sample->data.empty()) {
+            if (!v.sample || v.sample->data.empty()) {
                 v.amp *= v.decay;
             }
         }
