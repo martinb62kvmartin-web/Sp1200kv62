@@ -17,7 +17,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +31,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -45,6 +48,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
     return this.toMutableList().also { outer ->
@@ -493,6 +497,31 @@ fun padColor(index: Int): Color = when (index) {
 }
 
 @Composable
+fun RowScope.SmallButton(
+    label: String,
+    active: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .weight(1f)
+            .height(32.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) Color(0xFFE91E5A) else Color(0xFF262636)
+        ),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 10.sp,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
 fun Sp1200App(
     onPadDown: (Int) -> Unit,
     onPadUp: (Int) -> Unit,
@@ -551,51 +580,33 @@ fun Sp1200App(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = "SP-1200 Clone",
-            style = MaterialTheme.typography.titleLarge,
-            color = Color.White
-        )
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Button(onClick = { onViewChange(0) }) { Text("PADS") }
-            Button(onClick = { onViewChange(1) }) { Text("SEQ") }
-            Button(onClick = { onViewChange(2) }) { Text("EDIT") }
-            Button(onClick = { onViewChange(3) }) { Text("ROLL") }
-            Button(onClick = onPlayToggle) {
-                Text(if (playing) "STOP" else "PLAY")
-            }
-            Button(onClick = { onGateModeChange(!gateMode) }) {
-                Text(if (gateMode) "GATE" else "SHOT")
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            SmallButton("PADS", view == 0) { onViewChange(0) }
+            SmallButton("SEQ", view == 1) { onViewChange(1) }
+            SmallButton("EDIT", view == 2) { onViewChange(2) }
+            SmallButton("ROLL", view == 3) { onViewChange(3) }
         }
 
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            SmallButton(if (playing) "STOP" else "PLAY", playing) { onPlayToggle() }
+            SmallButton(if (gateMode) "GATE" else "SHOT", gateMode) { onGateModeChange(!gateMode) }
+            SmallButton(if (crunch) "12BIT" else "CLEAN", crunch) { onCrunchChange(!crunch) }
+            SmallButton(
+                when (midiMode) {
+                    1 -> "MIDI M"
+                    2 -> "MIDI S"
+                    else -> "MIDI"
+                },
+                midiMode != 0
+            ) { onMidiModeChange() }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf("A", "B", "C", "D").forEachIndexed { i, name ->
-                Button(onClick = { onBankChange(i) }) {
-                    Text(name, color = if (bank == i) Color.Black else Color.White)
-                }
-            }
-            Button(onClick = { onCrunchChange(!crunch) }) {
-                Text(if (crunch) "12BIT" else "CLEAN")
-            }
-            Button(onClick = onMidiModeChange) {
-                Text(
-                    when (midiMode) {
-                        1 -> "MIDI M"
-                        2 -> "MIDI S"
-                        else -> "MIDI OFF"
-                    }
-                )
+                SmallButton(name, bank == i) { onBankChange(i) }
             }
         }
 
