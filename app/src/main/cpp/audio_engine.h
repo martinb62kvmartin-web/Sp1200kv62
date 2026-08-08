@@ -27,6 +27,7 @@ public:
     void setPitchSemitones(double semitones);
     void setCrunch(bool enabled);
     bool loadSample(int padIndex, int fd);
+    bool previewFromFd(int fd);
 
     void setBank(int bank);
     void setMute(int padIndex, bool enabled);
@@ -75,6 +76,7 @@ private:
         std::atomic<bool> resetRequest{false};
         std::atomic<bool> hasNextSample{false};
         std::atomic<bool> gateClosed{false};
+        std::atomic<bool> playingSample{false};
         std::atomic<int> type{0};
 
         std::shared_ptr<const Sample> sample;
@@ -113,10 +115,11 @@ private:
     double nextNoise(Voice& voice);
     void triggerVoice(int padIndex, double semiAdd);
     void fireStep(int step);
+    std::shared_ptr<Sample> parseWav(const std::vector<uint8_t>& bytes);
 
     std::shared_ptr<oboe::AudioStream> outputStream;
     std::shared_ptr<oboe::AudioStream> inputStream;
-    std::array<Voice, kNumPads> voices;
+    std::array<Voice, kNumPads + 1> voices;
     std::array<std::array<std::shared_ptr<const Sample>, kNumPads>, kBanks> samples{};
     std::mutex sampleMutex;
     std::atomic<bool> gateMode{false};
