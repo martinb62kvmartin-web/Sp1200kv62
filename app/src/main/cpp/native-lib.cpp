@@ -9,6 +9,41 @@ JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetup(JNIEnv*, jobject) {
     if (engine == nullptr) {
         engine = new AudioEngine();
+    JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetMidiMode(JNIEnv*, jobject, jint mode) {
+    if (engine != nullptr) {
+        engine->setMidiMode(static_cast<int>(mode));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiTick(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiTick();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiStart(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiStart();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeMidiStop(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->midiStop();
+    }
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetMidiTicks(JNIEnv*, jobject) {
+    if (engine == nullptr) {
+        return 0;
+    }
+    return static_cast<jlong>(engine->getMidiTicksOut());
+}
     }
 }
 
