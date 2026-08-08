@@ -97,6 +97,14 @@ Java_com_example_sp1200_MainActivity_nativeLoadSample(JNIEnv*, jobject, jint pad
     return engine->loadSample(padIndex, fd) ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativePreviewFromFd(JNIEnv*, jobject, jint fd) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    return engine->previewFromFd(fd) ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSeqSetPlaying(JNIEnv*, jobject, jboolean playing) {
     if (engine != nullptr) {
