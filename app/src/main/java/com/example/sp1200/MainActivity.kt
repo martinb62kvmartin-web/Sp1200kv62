@@ -1,6 +1,9 @@
 package com.example.sp1200
 
 import android.content.pm.PackageManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.midi.MidiDevice
 import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
@@ -56,6 +59,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -178,12 +183,170 @@ class MainActivity : ComponentActivity() {
             ?: emptyList()
     }
 
+    private fun isPcm16Wav(f: File): Boolean {
+        return try {
+            val head = ByteArray(12)
+            f.inputStream().use { ins ->
+                var off = 0
+                while (off < 12) {
+                    val r = ins.read(head, off, 12 - off)
+                    if (r < 0) break
+                    off += r
+                }
+            }
+            String(head, 0, 4) == "RIFF" && String(head, 8, 4) == "WAVE"
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun writeWavKt(target: File, mono: FloatArray, rate: Int) {
+        val n = mono.size
+        val bb = ByteBuffer.allocate(44 + n * 2).order(ByteOrder.LITTLE_ENDIAN)
+        bb.put("RIFF".toByteArray())
+        bb.putInt(36 + n * 2)
+        bb.put("WAVE".toByteArray())
+        bb.put("fmt ".toByteArray())
+        bb.putInt(16)
+        bb.putShort(1)
+        bb.putShort(1)
+        bb.putInt(rate)
+        bb.putInt(rate * 2)
+        bb.putShort(2)
+        bb.putShort(16)
+        bb.put("data".toByteArray())
+        bb.putInt(n * 2)
+        for (v in mono) {
+            val c = v.coerceIn(-1f, 1f)
+            bb.putShort((c * 32767f).toInt().toShort())
+        }
+        target.writeBytes(bb.array())
+    }
+
+    private fun decodeAudioToWav(uri: Uri, target: File): Boolean {
+        var decoder: MediaCodec? = null
+        var extractor: MediaExtractor? = null
+        try {
+            extractor = MediaExtractor()
+            extractor.setDataSource(this, uri, null)
+
+            var track = -1
+            var format: MediaFormat? = null
+            for (i in 0 until extractor.trackCount) {
+                val f = extractor.getTrackFormat(i)
+                val mime = f.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    track = i
+                    format = f
+                    break
+                }
+            }
+            if (track < 0 || format == null) return false
+
+            extractor.selectTrack(track)
+
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: return false
+            decoder = MediaCodec.createDecoderByType(mime)
+            decoder.configure(format, null, null, 0)
+            decoder.start()
+
+            val sampleRate =
+                if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE))
+                    format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 44100
+            val channels =
+                if (format.containsKey(MediaFormat.KEY_CHANNEL_COUNT))
+                    format.getInteger(MediaFormat.KEY_CHANNEL_COUNT) else 1
+
+            val pcm = ArrayList<Short>()
+            val info = MediaCodec.BufferInfo()
+            var inputDone = false
+            var outputDone = false
+            val timeout = 10000L
+
+            while (!outputDone) {
+                if (!inputDone) {
+                    val inIdx = decoder.dequeueInputBuffer(timeout)
+                    if (inIdx >= 0) {
+                        val buf = decoder.getInputBuffer(inIdx)
+                        if (buf == null) {
+                            decoder.queueInputBuffer(inIdx, 0, 0, 0, 0)
+                        } else {
+                            val n = extractor.readSampleData(buf, 0)
+                            if (n < 0) {
+                                decoder.queueInputBuffer(
+                                    inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                                )
+                                inputDone = true
+                            } else {
+                                decoder.queueInputBuffer(inIdx, 0, n, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                }
+
+                val outIdx = decoder.dequeueOutputBuffer(info, timeout)
+                if (outIdx >= 0) {
+                    val buf = decoder.getOutputBuffer(outIdx)
+                    if (buf != null && info.size > 0) {
+                        val arr = ByteArray(info.size)
+                        buf.get(arr)
+                        for (j in 0 until info.size / 2) {
+                            val lo = arr[j * 2].toInt() and 0xFF
+                            val hi = arr[j * 2 + 1].toInt()
+                            pcm.add(((hi shl 8) or lo).toShort())
+                        }
+                    }
+                    decoder.releaseOutputBuffer(outIdx, false)
+                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        outputDone = true
+                    }
+                }
+            }
+
+            decoder.stop()
+            decoder.release()
+            decoder = null
+            extractor.release()
+            extractor = null
+
+            if (pcm.isEmpty() || channels <= 0) return false
+
+            val frames = pcm.size / channels
+            if (frames <= 0) return false
+            val mono = FloatArray(frames)
+            for (i in 0 until frames) {
+                var acc = 0f
+                for (c in 0 until channels) {
+                    acc += pcm[i * channels + c] / 32768f
+                }
+                mono[i] = acc / channels
+            }
+
+            writeWavKt(target, mono, sampleRate)
+            return true
+        } catch (_: Exception) {
+            return false
+        } finally {
+            try {
+                decoder?.release()
+            } catch (_: Exception) {
+            }
+            try {
+                extractor?.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun previewFile(name: String) {
         val f = File(libraryDir(), name)
         if (!f.exists()) return
         try {
             ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                nativePreviewFromFd(pfd.fd)
+                if (!nativePreviewFromFd(pfd.fd)) {
+                    Toast.makeText(this, "Preview failed: $name", Toast.LENGTH_SHORT).show()
+                }
             }
         } catch (_: Exception) {
         }
@@ -200,6 +363,8 @@ class MainActivity : ComponentActivity() {
                         peaks = nativeGetPeaks(pad, 200)
                     }
                     Toast.makeText(this, "PAD ${pad + 1}: $name", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "Load failed: $name", Toast.LENGTH_SHORT).show()
                 }
             }
         } catch (_: Exception) {
@@ -285,6 +450,16 @@ class MainActivity : ComponentActivity() {
                         ins.copyTo(outs)
                     }
                 }
+
+                if (!isPcm16Wav(target)) {
+                    val ok = decodeAudioToWav(uri, target)
+                    if (!ok) {
+                        target.delete()
+                        Toast.makeText(this, "Unsupported audio format", Toast.LENGTH_SHORT).show()
+                        return@registerForActivityResult
+                    }
+                }
+
                 refreshLib()
                 Toast.makeText(this, "Imported: ${target.name}", Toast.LENGTH_SHORT).show()
             } catch (_: Exception) {
