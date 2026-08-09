@@ -37,7 +37,7 @@ public:
     void setSeqBpm(double bpm);
     void setSeqSwing(double swing);
     void setSeqMask(int padIndex, int mask);
-    void setRoll(int padIndex, int step, int value);
+    void setRoll(int padIndex, int step, int value, int len);
 
     void setLoopPoints(int padIndex, double startFrac, double endFrac);
     void setLoopOn(int padIndex, bool enabled);
@@ -137,6 +137,8 @@ private:
     std::atomic<double> seqSwing{0.0};
     std::array<std::array<std::atomic<int>, kNumPads>, kBanks> seqMask{};
     std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollPitch{};
+    std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollLen{};
+    std::array<int, kNumPads> rollEndAt{};
     double totalFrames = 0.0;
     double nextStepFrame = 0.0;
     double nextTickFrame = 0.0;
