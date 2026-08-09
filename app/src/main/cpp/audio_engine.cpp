@@ -148,6 +148,7 @@ bool AudioEngine::start() {
 
 void AudioEngine::stop() {
     recording.store(false, std::memory_order_relaxed);
+    capturing.store(false, std::memory_order_relaxed);
 
     if (inputStream) {
         inputStream->stop();
@@ -167,6 +168,30 @@ void AudioEngine::stop() {
         outputStream.reset();
         LOGI("Audio engine stopped");
     }
+}
+
+void AudioEngine::startCapture() {
+    std::lock_guard<std::mutex> lock(capMutex);
+    capBuf.clear();
+    capturing.store(true, std::memory_order_relaxed);
+}
+
+bool AudioEngine::stopCapture(const std::string& path) {
+    capturing.store(false, std::memory_order_relaxed);
+
+    std::vector<float> data;
+    {
+        std::lock_guard<std::mutex> lock(capMutex);
+        data.swap(capBuf);
+    }
+
+    if (data.empty()) {
+        return false;
+    }
+
+    const bool ok = writeWavFile(path, data, static_cast<uint32_t>(sampleRate));
+    LOGI("Export written: %s (%zu frames)", path.c_str(), data.size());
+    return ok;
 }
 
 void AudioEngine::setGateMode(bool enabled) {
@@ -1060,6 +1085,13 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
 
         output[frame] = mix * 0.8f;
+    }
+
+    if (capturing.load(std::memory_order_relaxed)) {
+        std::lock_guard<std::mutex> lock(capMutex);
+        if (capBuf.size() < static_cast<size_t>(sampleRate) * 120) {
+            capBuf.insert(capBuf.end(), output, output + numFrames);
+        }
     }
 
     totalFrames += static_cast<double>(numFrames);
