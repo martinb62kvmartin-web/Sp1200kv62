@@ -2,11 +2,12 @@ import io
 import os
 import sys
 
-# Каждый патч = (путь к файлу, старый текст, новый текст).
-# Скрипт ищет старый текст в файле и заменяет на новый.
 PATCHES = [
-    # Пример (не удаляй, это проверка):
-    # ("app/src/main/cpp/audio_engine.h", "старый_текст", "новый_текст"),
+    (
+        "app/src/main/java/com/example/sp1200/MainActivity.kt",
+        'text = "SP-1200 Clone",',
+        'text = "SP-1200 v2",'
+    ),
 ]
 
 def main():
