@@ -1,5 +1,7 @@
 package com.example.sp1200
 
+import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
@@ -9,10 +11,13 @@ import android.media.midi.MidiDeviceInfo
 import android.media.midi.MidiManager
 import android.media.midi.MidiReceiver
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -122,6 +127,8 @@ class MainActivity : ComponentActivity() {
     private external fun nativeGetPadHits(padIndex: Int): Long
     private external fun nativeStartRecording(padIndex: Int): Boolean
     private external fun nativeStopRecording(): Boolean
+    private external fun nativeStartCapture()
+    private external fun nativeStopCapture(path: String): Boolean
 
     private lateinit var midiManager: MidiManager
     private var midiDevice: MidiDevice? = null
@@ -159,6 +166,9 @@ class MainActivity : ComponentActivity() {
     private var pollTick by mutableStateOf(0)
     private var hitTimes by mutableStateOf(List(8) { 0L })
     private var libFiles by mutableStateOf(listOf<String>())
+    private var exportBars by mutableStateOf(2)
+    private var exporting by mutableStateOf(false)
+    private var exportWasPlaying = false
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
@@ -470,6 +480,76 @@ class MainActivity : ComponentActivity() {
         pollHandler.postDelayed({
             nativeSetPitch(pitch)
         }, 500)
+    }
+
+    private fun startExport() {
+        if (exporting) return
+        exporting = true
+        exportWasPlaying = playing
+
+        nativeStartCapture()
+        playing = true
+        nativeSeqSetPlaying(true)
+
+        val secPerStep = (60.0 / bpm.toDouble()) / 4.0
+        val totalMs = (secPerStep * 16 * exportBars * 1000).toLong()
+
+        Toast.makeText(this, "Exporting $exportBars bars...", Toast.LENGTH_SHORT).show()
+
+        pollHandler.postDelayed({
+            if (!exportWasPlaying) {
+                playing = false
+                nativeSeqSetPlaying(false)
+            }
+
+            pollHandler.postDelayed({
+                val dir = File(filesDir, "exports")
+                dir.mkdirs()
+                val f = File(dir, "sp1200_beat.wav")
+                val ok = nativeStopCapture(f.absolutePath)
+                exporting = false
+
+                if (ok) {
+                    Toast.makeText(this, "Exported!", Toast.LENGTH_SHORT).show()
+                    publishAndShare(f)
+                } else {
+                    Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show()
+                }
+            }, 1000)
+        }, totalMs)
+    }
+
+    private fun publishAndShare(internalFile: File) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(
+                        MediaStore.MediaColumns.DISPLAY_NAME,
+                        "sp1200_beat_${System.currentTimeMillis()}.wav"
+                    )
+                    put(MediaStore.MediaColumns.MIME_TYPE, "audio/wav")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    contentResolver.openOutputStream(uri)?.use { outs ->
+                        internalFile.inputStream().use { it.copyTo(outs) }
+                    }
+
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = "audio/wav"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(share, "Share beat"))
+                }
+            } else {
+                Toast.makeText(this, "Saved: ${internalFile.absolutePath}", Toast.LENGTH_LONG).show()
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, "Saved: ${internalFile.absolutePath}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun pushPadParams(pad: Int) {
@@ -1080,6 +1160,16 @@ class MainActivity : ComponentActivity() {
                         onImport = { importLauncher.launch(arrayOf("audio/*")) },
                         onPreview = { name -> previewFile(name) },
                         onAssign = { pad, name -> assignFile(pad, name) },
+                        exportBars = exportBars,
+                        onExportBarsCycle = {
+                            exportBars = when (exportBars) {
+                                1 -> 2
+                                2 -> 4
+                                else -> 1
+                            }
+                        },
+                        exporting = exporting,
+                        onExport = { startExport() },
                         selectedPad = selectedPad,
                         onSelectPad = { pad ->
                             selectedPad = pad
@@ -1269,6 +1359,10 @@ fun Sp1200App(
     onImport: () -> Unit,
     onPreview: (String) -> Unit,
     onAssign: (Int, String) -> Unit,
+    exportBars: Int,
+    onExportBarsCycle: () -> Unit,
+    exporting: Boolean,
+    onExport: () -> Unit,
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
@@ -1324,6 +1418,8 @@ fun Sp1200App(
                 },
                 midiMode != 0
             ) { onMidiModeChange() }
+            SmallButton("x$exportBars", false) { onExportBarsCycle() }
+            SmallButton(if (exporting) "..." else "EXP", exporting) { onExport() }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1694,7 +1790,7 @@ fun RollView(
                             .clip(RoundedCornerShape(3.dp))
                             .background(if (blackKey) Color(0xFF1A1A2E) else Color(0xFFDDDDEE))
                             .clickable { onAudition(selectedPad, pitchOff) },
-                    contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
@@ -1995,7 +2091,7 @@ fun EditorView(
                 )
                 Slider(
                     value = padSustain,
-                    onValueChange = onPadSustain,
+                    onPadSustain = onPadSustain,
                     valueRange = 0f..100f
                 )
             }
