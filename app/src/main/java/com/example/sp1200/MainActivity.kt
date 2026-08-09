@@ -2091,7 +2091,7 @@ fun EditorView(
                 )
                 Slider(
                     value = padSustain,
-                    onPadSustain = onPadSustain,
+                    onValueChange = onPadSustain,
                     valueRange = 0f..100f
                 )
             }
