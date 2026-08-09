@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1693,7 +1694,7 @@ fun RollView(
                             .clip(RoundedCornerShape(3.dp))
                             .background(if (blackKey) Color(0xFF1A1A2E) else Color(0xFFDDDDEE))
                             .clickable { onAudition(selectedPad, pitchOff) },
-                        contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
