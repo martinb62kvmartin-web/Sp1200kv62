@@ -271,4 +271,25 @@ Java_com_example_sp1200_MainActivity_nativeStopRecording(JNIEnv*, jobject) {
     return engine->stopRecording() ? JNI_TRUE : JNI_FALSE;
 }
 
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeStartCapture(JNIEnv*, jobject) {
+    if (engine != nullptr) {
+        engine->startCapture();
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeStopCapture(JNIEnv* env, jobject, jstring path) {
+    if (engine == nullptr) {
+        return JNI_FALSE;
+    }
+    const char* s = env->GetStringUTFChars(path, nullptr);
+    if (s == nullptr) {
+        return JNI_FALSE;
+    }
+    const bool ok = engine->stopCapture(std::string(s));
+    env->ReleaseStringUTFChars(path, s);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
 }
