@@ -143,7 +143,6 @@ class MainActivity : ComponentActivity() {
     private val pollHandler = Handler(Looper.getMainLooper())
     private var prevHits = MutableList(8) { 0L }
 
-    private var pendingPad by mutableStateOf(-1)
     private var bank by mutableStateOf(0)
     private var loadedBanks by mutableStateOf(List(4) { setOf<Int>() })
     private var gateMode by mutableStateOf(false)
@@ -475,11 +474,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun auditionPitch(pad: Int, semi: Int) {
-        nativeSetPitch(semi.toFloat())
+        val p = pitchBanks[bank][pad]
+        val a = attackBanks[bank][pad]
+        val d = decayBanks[bank][pad]
+        val s = sustainBanks[bank][pad]
+        val r = releaseBanks[bank][pad]
+
+        nativeSetPadParams(pad, semi.toFloat(), a, d, s, r)
         nativeTriggerPad(pad)
+
         pollHandler.postDelayed({
-            nativeSetPitch(pitch)
-        }, 500)
+            nativeSetPadParams(pad, p, a, d, s, r)
+        }, 100)
     }
 
     private fun startExport() {
@@ -980,29 +986,6 @@ class MainActivity : ComponentActivity() {
         sendFn?.invoke(byteArrayOf(b.toByte()))
     }
 
-    private val pickSample =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-            val pad = pendingPad
-            pendingPad = -1
-
-            if (uri != null && pad >= 0) {
-                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    val ok = nativeLoadSample(pad, pfd.fd)
-                    if (ok) {
-                        loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + pad }
-                        loopStartBanks = loopStartBanks.set2(bank, pad, 0f)
-                        loopEndBanks = loopEndBanks.set2(bank, pad, 100f)
-                        if (pad == selectedPad) {
-                            peaks = nativeGetPeaks(pad, 200)
-                        }
-                        Toast.makeText(this, "PAD ${pad + 1}: sample loaded", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Need PCM 16-bit WAV", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -1028,10 +1011,6 @@ class MainActivity : ComponentActivity() {
                     Sp1200App(
                         onPadDown = { nativeTriggerPad(it) },
                         onPadUp = { nativePadRelease(it) },
-                        onPadLongPress = { pad ->
-                            pendingPad = pad
-                            pickSample.launch(arrayOf("audio/*"))
-                        },
                         loadedPads = loadedBanks[bank],
                         gateMode = gateMode,
                         onGateModeChange = { enabled ->
@@ -1117,28 +1096,28 @@ class MainActivity : ComponentActivity() {
                             val row = rollBanks[bank][pad]
                             val rowLen = rollLenBanks[bank][pad]
 
-                            var start = -1
-                            if (row[step] != 0) {
-                                start = step
+                            var coverStart = -1
+                            if (row[step] == enc) {
+                                coverStart = step
                             } else {
                                 for (s0 in 0 until step) {
-                                    if (row[s0] != 0 && step < s0 + rowLen[s0]) {
-                                        start = s0
+                                    if (row[s0] == enc && step < s0 + rowLen[s0]) {
+                                        coverStart = s0
                                         break
                                     }
                                 }
                             }
 
-                            if (start >= 0) {
+                            if (coverStart >= 0) {
                                 rollBanks = rollBanks.set2(
                                     bank, pad,
-                                    rollBanks[bank][pad].toMutableList().also { it[start] = 0 }
+                                    rollBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
                                 )
                                 rollLenBanks = rollLenBanks.set2(
                                     bank, pad,
-                                    rollLenBanks[bank][pad].toMutableList().also { it[start] = 0 }
+                                    rollLenBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
                                 )
-                                nativeSetRoll(pad, start, 0, 1)
+                                nativeSetRoll(pad, coverStart, 0, 1)
                             } else {
                                 rollBanks = rollBanks.set2(
                                     bank, pad,
@@ -1318,7 +1297,6 @@ fun RowScope.SmallButton(
 fun Sp1200App(
     onPadDown: (Int) -> Unit,
     onPadUp: (Int) -> Unit,
-    onPadLongPress: (Int) -> Unit,
     loadedPads: Set<Int>,
     gateMode: Boolean,
     onGateModeChange: (Boolean) -> Unit,
@@ -1549,7 +1527,7 @@ fun Sp1200App(
 
             else -> {
                 Text(
-                    text = "Tap = play. Long press = load WAV. Bank: ${'A' + bank}",
+                    text = "Hold = play. Load samples in LIB. Bank: ${'A' + bank}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF888888)
                 )
@@ -1568,8 +1546,7 @@ fun Sp1200App(
                             hasSample = loadedPads.contains(index),
                             flash = flashes[index],
                             onPadDown = onPadDown,
-                            onPadUp = onPadUp,
-                            onPadLongPress = onPadLongPress
+                            onPadUp = onPadUp
                         )
                     }
                 }
@@ -1767,7 +1744,7 @@ fun RollView(
 
                 val cover = IntArray(16) { -1 }
                 for (s0 in 0 until 16) {
-                    if (row[s0] != 0) {
+                    if (row[s0] == enc) {
                         val L = rowLen[s0]
                         for (s in s0 until minOf(16, s0 + L)) {
                             if (cover[s] == -1) cover[s] = s0
@@ -2160,8 +2137,7 @@ fun Pad(
     hasSample: Boolean,
     flash: Boolean,
     onPadDown: (Int) -> Unit,
-    onPadUp: (Int) -> Unit,
-    onPadLongPress: (Int) -> Unit
+    onPadUp: (Int) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -2175,9 +2151,6 @@ fun Pad(
                         onPadDown(index)
                         tryAwaitRelease()
                         onPadUp(index)
-                    },
-                    onLongPress = {
-                        onPadLongPress(index)
                     }
                 )
             },
