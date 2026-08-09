@@ -60,6 +60,9 @@ public:
     bool startRecording(int padIndex);
     bool stopRecording();
 
+    void startCapture();
+    bool stopCapture(const std::string& path);
+
     oboe::DataCallbackResult onAudioReady(
             oboe::AudioStream* stream,
             void* audioData,
@@ -152,6 +155,10 @@ private:
     std::atomic<bool> midiStartReq{false};
     std::atomic<bool> midiStopReq{false};
     int tickAccum = 0;
+
+    std::atomic<bool> capturing{false};
+    std::mutex capMutex;
+    std::vector<float> capBuf;
 
     std::string dataDir;
     std::atomic<bool> recording{false};
