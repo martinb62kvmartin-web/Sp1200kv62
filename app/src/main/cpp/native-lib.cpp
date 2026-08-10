@@ -106,6 +106,20 @@ Java_com_example_sp1200_MainActivity_nativePreviewFromFd(JNIEnv*, jobject, jint 
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeClearPad(JNIEnv*, jobject, jint padIndex) {
+    if (engine != nullptr) {
+        engine->clearPad(padIndex);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPadReverse(JNIEnv*, jobject, jint padIndex, jboolean enabled) {
+    if (engine != nullptr) {
+        engine->setPadReverse(padIndex, enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSeqSetPlaying(JNIEnv*, jobject, jboolean playing) {
     if (engine != nullptr) {
         engine->setSeqPlaying(playing == JNI_TRUE);
@@ -217,6 +231,17 @@ Java_com_example_sp1200_MainActivity_nativeSetMasterPan(JNIEnv*, jobject, jfloat
     if (engine != nullptr) {
         engine->setMasterPan(pan);
     }
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_example_sp1200_MainActivity_nativeGetLevels(JNIEnv* env, jobject) {
+    jfloatArray result = env->NewFloatArray(18);
+    if (engine == nullptr || result == nullptr) {
+        return result;
+    }
+    std::array<float, 18> lv = engine->getLevels();
+    env->SetFloatArrayRegion(result, 0, 18, lv.data());
+    return result;
 }
 
 JNIEXPORT void JNICALL
