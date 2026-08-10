@@ -6,24 +6,12 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-# 1) добавляем параметры в сигнатуру Sp1200App
-a("""    pollTick: Int,
-    crunch: Boolean,
-    onCrunchChange: (Boolean) -> Unit
-) {""", """    pollTick: Int,
-    crunch: Boolean,
-    onCrunchChange: (Boolean) -> Unit,
-    stretch: Int,
-    onStretch: (Int) -> Unit
-) {""")
-
-# 2) передаём их из setContent
-a("""                        pollTick = pollTick,""", """                        pollTick = pollTick,
-                        stretch = stretchBanks[bank][selectedPad],
-                        onStretch = { v ->
-                            stretchBanks = stretchBanks.set2(bank, selectedPad, v)
-                            nativeSetPadStretch(selectedPad, v)
-                        },""")
+a("""                stretch = stretchBanks[bank][selectedPad],
+                onStretch = { v ->
+                    stretchBanks = stretchBanks.set2(bank, selectedPad, v)
+                    nativeSetPadStretch(selectedPad, v)
+                }""", """                stretch = stretch,
+                onStretch = onStretch""")
 
 def main():
     for path, old, new in P:
