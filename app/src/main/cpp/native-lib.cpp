@@ -192,6 +192,34 @@ Java_com_example_sp1200_MainActivity_nativeSetPadParams(JNIEnv*, jobject, jint p
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPadVol(JNIEnv*, jobject, jint padIndex, jfloat vol) {
+    if (engine != nullptr) {
+        engine->setPadVol(padIndex, vol);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPadPan(JNIEnv*, jobject, jint padIndex, jfloat pan) {
+    if (engine != nullptr) {
+        engine->setPadPan(padIndex, pan);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetMasterVol(JNIEnv*, jobject, jfloat vol) {
+    if (engine != nullptr) {
+        engine->setMasterVol(vol);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetMasterPan(JNIEnv*, jobject, jfloat pan) {
+    if (engine != nullptr) {
+        engine->setMasterPan(pan);
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetMidiMode(JNIEnv*, jobject, jint mode) {
     if (engine != nullptr) {
         engine->setMidiMode(static_cast<int>(mode));
