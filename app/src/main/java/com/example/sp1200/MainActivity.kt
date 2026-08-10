@@ -25,11 +25,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.aspectRatio
@@ -37,20 +38,18 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -60,10 +59,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
@@ -71,6 +71,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.json.JSONArray
 import org.json.JSONObject
+
+val C_BG = Color(0xFF0F1418)
+val C_CYAN = Color(0xFF29C5F6)
+val C_PINK = Color(0xFFE9255B)
+val C_WAVEBG = Color(0xFFA62645)
+val C_DARK = Color(0xFF241B3F)
 
 private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
     return this.toMutableList().also { outer ->
@@ -102,6 +108,8 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetSolo(padIndex: Int, enabled: Boolean)
     private external fun nativeLoadSample(padIndex: Int, fd: Int): Boolean
     private external fun nativePreviewFromFd(fd: Int): Boolean
+    private external fun nativeClearPad(padIndex: Int)
+    private external fun nativeSetPadReverse(padIndex: Int, enabled: Boolean)
     private external fun nativeSeqSetPlaying(playing: Boolean)
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
@@ -123,6 +131,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetPadPan(padIndex: Int, pan: Float)
     private external fun nativeSetMasterVol(vol: Float)
     private external fun nativeSetMasterPan(pan: Float)
+    private external fun nativeGetLevels(): FloatArray
     private external fun nativeSetMidiMode(mode: Int)
     private external fun nativeMidiTick()
     private external fun nativeMidiStart()
@@ -171,6 +180,7 @@ class MainActivity : ComponentActivity() {
     private var playhead by mutableStateOf(0)
     private var pollTick by mutableStateOf(0)
     private var hitTimes by mutableStateOf(List(16) { 0L })
+    private var levels by mutableStateOf(FloatArray(18))
     private var libFiles by mutableStateOf(listOf<String>())
     private var mixAssign by mutableStateOf(List(5) { it })
     private var volBanks by mutableStateOf(List(16) { 100f })
@@ -180,6 +190,7 @@ class MainActivity : ComponentActivity() {
     private var exportBars by mutableStateOf(2)
     private var exporting by mutableStateOf(false)
     private var exportWasPlaying = false
+    private var reverseBanks by mutableStateOf(List(4) { List(16) { false } })
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
@@ -698,6 +709,12 @@ class MainActivity : ComponentActivity() {
                 bo.put("roll", rollArr)
                 bo.put("rolllen", rollLenArr)
 
+                val revArr = JSONArray()
+                for (p in 0 until 16) {
+                    revArr.put(reverseBanks[b][p])
+                }
+                bo.put("rev", revArr)
+
                 val loopsArr = JSONArray()
                 for (p in 0 until 16) {
                     val lo = JSONObject()
@@ -762,6 +779,7 @@ class MainActivity : ComponentActivity() {
             val newPatterns = patternBanks.toMutableList()
             val newRolls = rollBanks.toMutableList()
             val newRollLens = rollLenBanks.toMutableList()
+            val newRev = reverseBanks.toMutableList()
             val newLS = loopStartBanks.toMutableList()
             val newLE = loopEndBanks.toMutableList()
             val newLO = loopOnBanks.toMutableList()
@@ -796,6 +814,10 @@ class MainActivity : ComponentActivity() {
                     newRollLens[b] = rows
                 }
 
+                bo.optJSONArray("rev")?.let { rv ->
+                    newRev[b] = (0 until 16).map { rv.optBoolean(it, false) }
+                }
+
                 bo.optJSONArray("loops")?.let { la ->
                     for (p in 0 until minOf(16, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
@@ -820,6 +842,7 @@ class MainActivity : ComponentActivity() {
             patternBanks = newPatterns
             rollBanks = newRolls
             rollLenBanks = newRollLens
+            reverseBanks = newRev
             loopStartBanks = newLS
             loopEndBanks = newLE
             loopOnBanks = newLO
@@ -857,6 +880,7 @@ class MainActivity : ComponentActivity() {
                 }
                 nativeSetLoopPoints(p, loopStartBanks[b][p] / 100f, loopEndBanks[b][p] / 100f)
                 nativeSetLoopOn(p, loopOnBanks[b][p])
+                nativeSetPadReverse(p, reverseBanks[b][p])
                 nativeSetPadParams(
                     p,
                     pitchBanks[b][p],
@@ -1054,10 +1078,10 @@ class MainActivity : ComponentActivity() {
         midiManager = getSystemService(MIDI_SERVICE) as MidiManager
 
         setContent {
-            MaterialTheme {
-                Surface(
+            androidx.compose.material3.MaterialTheme {
+                androidx.compose.material3.Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFF0C1416)
+                    color = C_BG
                 ) {
                     Sp1200App(
                         onPadDown = { nativeTriggerPad(it) },
@@ -1089,10 +1113,7 @@ class MainActivity : ComponentActivity() {
                             peaks = nativeGetPeaks(selectedPad, 200)
                         },
                         view = view,
-                        onViewChange = { v ->
-                            view = v
-                            if (v == 4) refreshLib()
-                        },
+                        onViewChange = { view = it },
                         playing = playing,
                         onPlayToggle = {
                             playing = !playing
@@ -1131,7 +1152,6 @@ class MainActivity : ComponentActivity() {
                             nativeSetSolo(pad, v)
                         },
                         midiMode = midiMode,
-                        midiDeviceName = midiDeviceName,
                         onMidiModeChange = {
                             val next = (midiMode + 1) % 3
                             midiMode = next
@@ -1218,6 +1238,7 @@ class MainActivity : ComponentActivity() {
                             masterPan = value
                             nativeSetMasterPan((value - 50f) / 50f)
                         },
+                        levels = levels,
                         exportBars = exportBars,
                         onExportBarsCycle = {
                             exportBars = when (exportBars) {
@@ -1264,31 +1285,22 @@ class MainActivity : ComponentActivity() {
                                 Toast.makeText(this, "Trimmed", Toast.LENGTH_SHORT).show()
                             }
                         },
-                        onPlayDown = { nativeTriggerPad(selectedPad) },
-                        onPlayUp = { nativePadRelease(selectedPad) },
+                        onDelete = {
+                            nativeClearPad(selectedPad)
+                            loadedBanks = loadedBanks.toMutableList().also {
+                                it[bank] = it[bank] - selectedPad
+                            }
+                            peaks = FloatArray(0)
+                        },
+                        reverse = reverseBanks[bank][selectedPad],
+                        onReverseToggle = {
+                            val v = !reverseBanks[bank][selectedPad]
+                            reverseBanks = reverseBanks.set2(bank, selectedPad, v)
+                            nativeSetPadReverse(selectedPad, v)
+                        },
                         padPitch = pitchBanks[bank][selectedPad],
                         onPadPitch = { value ->
                             pitchBanks = pitchBanks.set2(bank, selectedPad, value)
-                            pushPadParams(selectedPad)
-                        },
-                        padAttack = attackBanks[bank][selectedPad],
-                        onPadAttack = { value ->
-                            attackBanks = attackBanks.set2(bank, selectedPad, value)
-                            pushPadParams(selectedPad)
-                        },
-                        padDecay = decayBanks[bank][selectedPad],
-                        onPadDecay = { value ->
-                            decayBanks = decayBanks.set2(bank, selectedPad, value)
-                            pushPadParams(selectedPad)
-                        },
-                        padSustain = sustainBanks[bank][selectedPad],
-                        onPadSustain = { value ->
-                            sustainBanks = sustainBanks.set2(bank, selectedPad, value)
-                            pushPadParams(selectedPad)
-                        },
-                        padReleaseMs = releaseBanks[bank][selectedPad],
-                        onPadReleaseMs = { value ->
-                            releaseBanks = releaseBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
                         },
                         padVol = volBanks[selectedPad],
@@ -1300,7 +1312,8 @@ class MainActivity : ComponentActivity() {
                         onPadPan = { value ->
                             panBanks = panBanks.toMutableList().also { it[selectedPad] = value }
                             nativeSetPadPan(selectedPad, (value - 50f) / 50f)
-                        }
+                        },
+                        pollTick = pollTick
                     )
                 }
             }
@@ -1314,6 +1327,7 @@ class MainActivity : ComponentActivity() {
         pollHandler.post(object : Runnable {
             override fun run() {
                 playhead = nativeGetCurrentStep()
+                levels = nativeGetLevels()
 
                 val now = System.currentTimeMillis()
                 val newTimes = hitTimes.toMutableList()
@@ -1346,47 +1360,187 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-fun padColor(index: Int): Color = when (index) {
-    0 -> Color(0xFF2DD4BF)
-    1 -> Color(0xFF4CC3E0)
-    2 -> Color(0xFF7FA8F0)
-    3 -> Color(0xFFA78BFA)
-    4 -> Color(0xFFE07FA0)
-    5 -> Color(0xFFF0A45C)
-    6 -> Color(0xFFB8E05C)
-    7 -> Color(0xFF5EEAD4)
-    8 -> Color(0xFF38BDF8)
-    9 -> Color(0xFF818CF8)
-    10 -> Color(0xFFC084FC)
-    11 -> Color(0xFFF472B6)
-    12 -> Color(0xFFFBBF24)
-    13 -> Color(0xFFA3E635)
-    14 -> Color(0xFF34D399)
-    else -> Color(0xFF22D3EE)
+@Composable
+fun KBtn(
+    label: String,
+    active: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (active) C_PINK else Color.White)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            color = if (active) Color.White else C_PINK,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp
+        )
+    }
 }
 
 @Composable
-fun RowScope.SmallButton(
+fun RowScope.TabBtn(
     label: String,
     active: Boolean,
     onClick: () -> Unit
 ) {
-    Button(
-        onClick = onClick,
+    Box(
         modifier = Modifier
             .weight(1f)
-            .height(32.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) Color(0xFF2DD4BF) else Color(0xFF152528)
-        ),
-        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+            .height(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (active) C_PINK else C_DARK)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = if (active) Color(0xFF06201D) else Color(0xFFBFE6E2),
-            fontSize = 10.sp,
-            maxLines = 1
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = 11.sp
         )
+    }
+}
+
+@Composable
+fun Fader(
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val span = range.endInclusive - range.start
+    val frac = ((value - range.start) / span).coerceIn(0f, 1f)
+
+    BoxWithConstraints(
+        modifier = modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(C_DARK)
+            .pointerInput(value, range.start, range.endInclusive) {
+                detectDragGestures { change, drag ->
+                    change.consume()
+                    val d = drag.x / size.width.toFloat() * span
+                    onValueChange((value + d).coerceIn(range))
+                }
+            }
+    ) {
+        val w = constraints.maxWidth
+        val capW = 18
+        val x = (frac * (w - capW)).toInt()
+
+        Box(
+            modifier = Modifier
+                .offset(x = androidx.compose.ui.unit.IntOffset(x, 0))
+                .width(18.dp)
+                .fillMaxHeight()
+                .background(C_CYAN)
+        )
+    }
+}
+
+@Composable
+fun Knob(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit
+) {
+    val span = range.endInclusive - range.start
+    val frac = ((value - range.start) / span).coerceIn(0f, 1f)
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            modifier = Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Color.White)
+                .pointerInput(value, range.start, range.endInclusive) {
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        onValueChange((value - drag.y / 200f * span).coerceIn(range))
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .rotate(-135f + frac * 270f)
+                    .width(3.dp)
+                    .height(26.dp)
+                    .offset(y = (-16).dp)
+                    .background(Color.Black)
+            )
+        }
+        Text(label, color = C_PINK, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+    }
+}
+
+@Composable
+fun Wave(
+    peaks: FloatArray,
+    bg: Color,
+    line: Color,
+    shake: Int,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier.background(bg)) {
+        val n = peaks.size
+        if (n > 0) {
+            val w = size.width
+            val h = size.height
+            val barW = w / n
+            val off = if (shake != 0) ((shake % 3) - 1) * h * 0.04f else 0f
+
+            drawLine(
+                color = Color(0x55FFFFFF),
+                start = Offset(0f, h / 2),
+                end = Offset(w, h / 2),
+                strokeWidth = 1f
+            )
+
+            for (i in 0 until n) {
+                val x = (i + 0.5f) * w / n
+                val p = peaks[i].coerceIn(0f, 1f) * (h / 2f) * 0.95f
+                drawLine(
+                    color = line,
+                    start = Offset(x, h / 2 - p + off),
+                    end = Offset(x, h / 2 + p + off),
+                    strokeWidth = barW
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun VMeter(
+    level: Float,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier.background(C_DARK)) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .fillMaxHeight(level.coerceIn(0f, 1f))
+                .background(C_PINK)
+        )
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(2.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("0", color = Color(0x88FFFFFF), fontSize = 7.sp)
+            Text("24", color = Color(0x88FFFFFF), fontSize = 7.sp)
+            Text("54", color = Color(0x88FFFFFF), fontSize = 7.sp)
+        }
     }
 }
 
@@ -1419,7 +1573,6 @@ fun Sp1200App(
     solos: List<Boolean>,
     onSoloToggle: (Int) -> Unit,
     midiMode: Int,
-    midiDeviceName: String,
     onMidiModeChange: () -> Unit,
     roll: List<List<Int>>,
     rollLens: List<List<Int>>,
@@ -1445,6 +1598,7 @@ fun Sp1200App(
     onMasterVol: (Float) -> Unit,
     masterPan: Float,
     onMasterPan: (Float) -> Unit,
+    levels: FloatArray,
     exportBars: Int,
     onExportBarsCycle: () -> Unit,
     exporting: Boolean,
@@ -1455,53 +1609,43 @@ fun Sp1200App(
     loopStart: Float,
     loopEnd: Float,
     onLoopStart: (Float) -> Unit,
-    onLoopEnd: (Float) -> Unit,
     loopOn: Boolean,
     onLoopToggle: () -> Unit,
     onTrim: () -> Unit,
-    onPlayDown: () -> Unit,
-    onPlayUp: () -> Unit,
+    onDelete: () -> Unit,
+    reverse: Boolean,
+    onReverseToggle: () -> Unit,
     padPitch: Float,
     onPadPitch: (Float) -> Unit,
-    padAttack: Float,
-    onPadAttack: (Float) -> Unit,
-    padDecay: Float,
-    onPadDecay: (Float) -> Unit,
-    padSustain: Float,
-    onPadSustain: (Float) -> Unit,
-    padReleaseMs: Float,
-    onPadReleaseMs: (Float) -> Unit,
     padVol: Float,
     onPadVol: (Float) -> Unit,
     padPan: Float,
-    onPadPan: (Float) -> Unit
+    onPadPan: (Float) -> Unit,
+    pollTick: Int
 ) {
+    val padPeaks = remember(bank, loadedPads) {
+        (0 until 16).map { i -> if (loadedPads.contains(i)) nativeGetPeaksSafe(i, 48) else FloatArray(0) }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(12.dp),
+            .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(
-            text = "SP-1200 v3",
-            style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFF2DD4BF)
-        )
-
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            SmallButton("PADS", view == 0) { onViewChange(0) }
-            SmallButton("SEQ", view == 1) { onViewChange(1) }
-            SmallButton("EDIT", view == 2) { onViewChange(2) }
-            SmallButton("ROLL", view == 3) { onViewChange(3) }
-            SmallButton("LIB", view == 4) { onViewChange(4) }
-            SmallButton("MIX", view == 6) { onViewChange(6) }
+            TabBtn("SAMPLE", view == 0) { onViewChange(0) }
+            TabBtn("SEQ", view == 1) { onViewChange(1) }
+            TabBtn("ROLL", view == 3) { onViewChange(3) }
+            TabBtn("MIX", view == 6) { onViewChange(6) }
+            TabBtn("LIB", view == 4) { onViewChange(4) }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            SmallButton(if (playing) "STOP" else "PLAY", playing) { onPlayToggle() }
-            SmallButton(if (gateMode) "GATE" else "SHOT", gateMode) { onGateModeChange(!gateMode) }
-            SmallButton(if (crunch) "12BIT" else "CLEAN", crunch) { onCrunchChange(!crunch) }
-            SmallButton(
+            TabBtn(if (playing) "STOP" else "PLAY", playing) { onPlayToggle() }
+            TabBtn(if (gateMode) "GATE" else "SHOT", gateMode) { onGateModeChange(!gateMode) }
+            TabBtn(if (crunch) "12BIT" else "CLEAN", crunch) { onCrunchChange(!crunch) }
+            TabBtn(
                 when (midiMode) {
                     1 -> "MIDI M"
                     2 -> "MIDI S"
@@ -1509,68 +1653,14 @@ fun Sp1200App(
                 },
                 midiMode != 0
             ) { onMidiModeChange() }
-            SmallButton("x$exportBars", false) { onExportBarsCycle() }
-            SmallButton(if (exporting) "..." else "EXP", exporting) { onExport() }
+            TabBtn("x$exportBars", false) { onExportBarsCycle() }
+            TabBtn(if (exporting) "..." else "EXP", exporting) { onExport() }
+            TabBtn(if (recording) "REC*" else "REC", recording) { onRecToggle() }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             listOf("A", "B", "C", "D").forEachIndexed { i, name ->
-                SmallButton(name, bank == i) { onBankChange(i) }
-            }
-            SmallButton(if (recording) "REC*" else "REC", recording) { onRecToggle() }
-        }
-
-        Text(
-            text = "MIDI: $midiDeviceName",
-            color = Color(0xFF7FA6A3),
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "PITCH ${pitch.toInt()} st",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = pitch,
-                    onValueChange = onPitchChange,
-                    valueRange = -12f..12f,
-                    steps = 23
-                )
-            }
-
-            if (view == 1) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "BPM ${bpm.toInt()}",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Slider(
-                        value = bpm,
-                        onValueChange = onBpmChange,
-                        valueRange = 60f..180f
-                    )
-                }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "SWING ${swing.toInt()}%",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Slider(
-                        value = swing,
-                        onValueChange = onSwingChange,
-                        valueRange = 0f..50f
-                    )
-                }
+                TabBtn(name, bank == i) { onBankChange(i) }
             }
         }
 
@@ -1586,51 +1676,19 @@ fun Sp1200App(
                 playing = playing
             )
 
-            2 -> EditorView(
+            3 -> RollView(
                 selectedPad = selectedPad,
                 onSelectPad = onSelectPad,
                 loadedPads = loadedPads,
-                peaks = peaks,
-                loopStart = loopStart,
-                loopEnd = loopEnd,
-                onLoopStart = onLoopStart,
-                onLoopEnd = onLoopEnd,
-                loopOn = loopOn,
-                onLoopToggle = onLoopToggle,
-                onTrim = onTrim,
-                onPlayDown = onPlayDown,
-                onPlayUp = onPlayUp,
-                padPitch = padPitch,
-                onPadPitch = onPadPitch,
-                padAttack = padAttack,
-                onPadAttack = onPadAttack,
-                padDecay = padDecay,
-                onPadDecay = onPadDecay,
-                padSustain = padSustain,
-                onPadSustain = onPadSustain,
-                padReleaseMs = padReleaseMs,
-                onPadReleaseMs = onPadReleaseMs,
-                padVol = padVol,
-                onPadVol = onPadVol,
-                padPan = padPan,
-                onPadPan = onPadPan
+                roll = roll,
+                rollLens = rollLens,
+                noteLen = noteLen,
+                onNoteLenCycle = onNoteLenCycle,
+                onToggleRollCell = onToggleRollCell,
+                onAudition = onAudition,
+                playhead = playhead,
+                playing = playing
             )
-
-            3 -> Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-                RollView(
-                    selectedPad = selectedPad,
-                    onSelectPad = onSelectPad,
-                    loadedPads = loadedPads,
-                    roll = roll,
-                    rollLens = rollLens,
-                    noteLen = noteLen,
-                    onNoteLenCycle = onNoteLenCycle,
-                    onToggleRollCell = onToggleRollCell,
-                    onAudition = onAudition,
-                    playhead = playhead,
-                    playing = playing
-                )
-            }
 
             4 -> LibView(
                 files = libFiles,
@@ -1652,149 +1710,225 @@ fun Sp1200App(
                 masterVol = masterVol,
                 onMasterVol = onMasterVol,
                 masterPan = masterPan,
-                onMasterPan = onMasterPan
+                onMasterPan = onMasterPan,
+                levels = levels,
+                mutes = mutes,
+                onMuteToggle = onMuteToggle,
+                solos = solos,
+                onSoloToggle = onSoloToggle
             )
 
-            else -> {
-                Text(
-                    text = "Hold = play. Long press = load WAV. Bank: ${'A' + bank}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF7FA6A3)
-                )
-
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(16) { index ->
-                        Pad(
-                            index = index,
-                            hasSample = loadedPads.contains(index),
-                            flash = flashes[index],
-                            onPadDown = onPadDown,
-                            onPadUp = onPadUp,
-                            onPadLongPress = onPadLongPress
-                        )
-                    }
-                }
-            }
+            else -> SampleView(
+                selectedPad = selectedPad,
+                onSelectPad = onSelectPad,
+                loadedPads = loadedPads,
+                peaks = peaks,
+                padPeaks = padPeaks,
+                flashes = flashes,
+                onPadDown = onPadDown,
+                onPadUp = onPadUp,
+                onPadLongPress = onPadLongPress,
+                gateMode = gateMode,
+                onGateModeChange = onGateModeChange,
+                loopOn = loopOn,
+                onLoopToggle = onLoopToggle,
+                reverse = reverse,
+                onReverseToggle = onReverseToggle,
+                padPitch = padPitch,
+                onPadPitch = onPadPitch,
+                padVol = padVol,
+                onPadVol = onPadVol,
+                padPan = padPan,
+                onPadPan = onPadPan,
+                onTrim = onTrim,
+                onDelete = onDelete,
+                pollTick = pollTick,
+                bpm = bpm,
+                onBpmChange = onBpmChange,
+                swing = swing,
+                onSwingChange = onSwingChange
+            )
         }
     }
 }
 
+fun nativeGetPeaksSafe(pad: Int, buckets: Int): FloatArray {
+    return try {
+        // вызов через activity невозможен здесь; используем пустой массив как заглушку
+        FloatArray(0)
+    } catch (_: Exception) {
+        FloatArray(0)
+    }
+}
+
 @Composable
-fun LibView(
-    files: List<String>,
-    onImport: () -> Unit,
-    onPreview: (String) -> Unit,
-    onAssign: (Int, String) -> Unit,
-    loadedPads: Set<Int>,
+fun SampleView(
     selectedPad: Int,
-    onSelectPad: (Int) -> Unit
+    onSelectPad: (Int) -> Unit,
+    loadedPads: Set<Int>,
+    peaks: FloatArray,
+    padPeaks: List<FloatArray>,
+    flashes: List<Boolean>,
+    onPadDown: (Int) -> Unit,
+    onPadUp: (Int) -> Unit,
+    onPadLongPress: (Int) -> Unit,
+    gateMode: Boolean,
+    onGateModeChange: (Boolean) -> Unit,
+    loopOn: Boolean,
+    onLoopToggle: () -> Unit,
+    reverse: Boolean,
+    onReverseToggle: () -> Unit,
+    padPitch: Float,
+    onPadPitch: (Float) -> Unit,
+    padVol: Float,
+    onPadVol: (Float) -> Unit,
+    padPan: Float,
+    onPadPan: (Float) -> Unit,
+    onTrim: () -> Unit,
+    onDelete: () -> Unit,
+    pollTick: Int,
+    bpm: Float,
+    onBpmChange: (Float) -> Unit,
+    swing: Float,
+    onSwingChange: (Float) -> Unit
 ) {
-    var armedFile by remember { mutableStateOf<String?>(null) }
-
     Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(C_CYAN)
+                .padding(10.dp)
         ) {
-            for (pad in 0 until 16) {
-                val bg = when {
-                    armedFile != null -> Color(0xFF1B3236)
-                    pad == selectedPad -> Color.White
-                    loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF101C1F)
-                }
-
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Box(
                     modifier = Modifier
-                        .weight(1f)
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(bg)
-                        .clickable {
-                            val armed = armedFile
-                            if (armed != null) {
-                                onAssign(pad, armed)
-                                armedFile = null
-                            } else {
-                                onSelectPad(pad)
-                            }
-                        },
-                    contentAlignment = Alignment.Center
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .background(C_PINK)
+                )
+                Wave(
+                    peaks = peaks,
+                    bg = C_WAVEBG,
+                    line = C_CYAN,
+                    shake = if (flashes[selectedPad]) pollTick else 0,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp)
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "${pad + 1}",
-                        color = if (pad == selectedPad) Color.Black else Color.White,
-                        fontSize = 8.sp
+                    KBtn(
+                        "<", false,
+                        { onSelectPad((selectedPad + 15) % 16) },
+                        Modifier.size(40.dp)
+                    )
+                    KBtn("ONE SHOT", !gateMode, { onGateModeChange(!gateMode) }, Modifier.weight(1f).height(44.dp))
+                    KBtn("REVERSE", reverse, { onReverseToggle() }, Modifier.weight(1f).height(44.dp))
+                    KBtn("LOOP", loopOn, { onLoopToggle() }, Modifier.weight(1f).height(44.dp))
+                    KBtn(
+                        ">", false,
+                        { onSelectPad((selectedPad + 1) % 16) },
+                        Modifier.size(40.dp)
                     )
                 }
             }
         }
 
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = onImport) { Text("IMPORT") }
-            Text(
-                text = if (armedFile != null) {
-                    "Holding: $armedFile — tap a pad"
-                } else {
-                    "Tap = play. Hold = pick up, then tap pad"
-                },
-                color = if (armedFile != null) Color(0xFF2DD4BF) else Color(0xFF7FA6A3),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1
-            )
+            Knob("VOL", padVol, 0f..150f, onPadVol)
+            Knob("PITCH", padPitch, -12f..12f, onPadPitch)
+            Knob("PAN", padPan, 0f..100f, onPadPan)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                KBtn("EDIT", false, onTrim, Modifier.fillMaxWidth().height(38.dp))
+                KBtn("DELETE", false, onDelete, Modifier.fillMaxWidth().height(38.dp))
+            }
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(4),
+            modifier = Modifier.height(520.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(files.size) { i ->
-                val name = files[i]
-
+            items(16) { index ->
+                val has = loadedPads.contains(index)
+                val flash = flashes[index]
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (armedFile == name) Color(0xFF2DD4BF) else Color(0xFF152528))
-                        .pointerInput(name) {
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (index == selectedPad) C_CYAN
+                            else if (has) C_PINK.copy(alpha = 0.75f)
+                            else C_PINK.copy(alpha = 0.45f)
+                        )
+                        .pointerInput(index) {
                             detectTapGestures(
-                                onTap = {
-                                    if (armedFile == name) {
-                                        armedFile = null
-                                    } else {
-                                        onPreview(name)
-                                    }
+                                onPress = {
+                                    onPadDown(index)
+                                    tryAwaitRelease()
+                                    onPadUp(index)
                                 },
-                                onLongPress = {
-                                    armedFile = name
-                                }
+                                onLongPress = { onPadLongPress(index) }
                             )
-                        },
-                    contentAlignment = Alignment.CenterStart
+                        }
                 ) {
+                    if (has) {
+                        Wave(
+                            peaks = padPeaks[index],
+                            bg = Color.Transparent,
+                            line = if (index == selectedPad) Color(0xFF083A46) else Color(0x66101418),
+                            shake = if (flash) pollTick else 0,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(6.dp)
+                        )
+                    }
+                    if (index == selectedPad) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.Transparent)
+                        )
+                    }
                     Text(
-                        text = name,
-                        color = if (armedFile == name) Color(0xFF06201D) else Color.White,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 12.dp)
+                        text = "${index + 1}",
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(4.dp)
                     )
                 }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("BPM ${bpm.toInt()}", color = Color.White, fontSize = 10.sp)
+                Fader(bpm, 60f..180f, onBpmChange, Modifier.fillMaxWidth())
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("SWING ${swing.toInt()}%", color = Color.White, fontSize = 10.sp)
+                Fader(swing, 0f..50f, onSwingChange, Modifier.fillMaxWidth())
             }
         }
     }
@@ -1811,604 +1945,75 @@ fun MixView(
     masterVol: Float,
     onMasterVol: (Float) -> Unit,
     masterPan: Float,
-    onMasterPan: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "MASTER",
-                color = Color(0xFF2DD4BF),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.width(64.dp)
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text("VOL ${masterVol.toInt()}%", color = Color.White, fontSize = 9.sp)
-                Slider(value = masterVol, onValueChange = onMasterVol, valueRange = 0f..150f)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text("PAN ${masterPan.toInt()}", color = Color.White, fontSize = 9.sp)
-                Slider(value = masterPan, onValueChange = onMasterPan, valueRange = 0f..100f)
-            }
-        }
-
-        for (ch in 0 until 5) {
-            val pad = mixAssign[ch]
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(64.dp)
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF152528))
-                        .clickable { onMixAssignCycle(ch) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "CH${ch + 1}:P${pad + 1}",
-                        color = Color.White,
-                        fontSize = 9.sp
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("VOL ${volOf(pad).toInt()}%", color = Color.White, fontSize = 9.sp)
-                    Slider(value = volOf(pad), onValueChange = { onVol(pad, it) }, valueRange = 0f..150f)
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("PAN ${panOf(pad).toInt()}", color = Color.White, fontSize = 9.sp)
-                    Slider(value = panOf(pad), onValueChange = { onPan(pad, it) }, valueRange = 0f..100f)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RollView(
-    selectedPad: Int,
-    onSelectPad: (Int) -> Unit,
-    loadedPads: Set<Int>,
-    roll: List<List<Int>>,
-    rollLens: List<List<Int>>,
-    noteLen: Int,
-    onNoteLenCycle: () -> Unit,
-    onToggleRollCell: (Int, Int, Int) -> Unit,
-    onAudition: (Int, Int) -> Unit,
-    playhead: Int,
-    playing: Boolean
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            for (pad in 0 until 16) {
-                val bg = when {
-                    pad == selectedPad -> Color.White
-                    loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF101C1F)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(bg)
-                        .clickable { onSelectPad(pad) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${pad + 1}",
-                        color = if (pad == selectedPad) Color.Black else Color.White,
-                        fontSize = 8.sp
-                    )
-                }
-            }
-        }
-
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Button(onClick = onNoteLenCycle) { Text("LEN $noteLen") }
-            Text(
-                text = "Tap key = hear. Tap cell = note. Tap note = delete",
-                color = Color(0xFF7FA6A3),
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1
-            )
-        }
-
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            items(25) { r ->
-                val pitchOff = 12 - r
-                val enc = pitchOff + 13
-
-                val row = roll[selectedPad]
-                val rowLen = rollLens[selectedPad]
-
-                val cover = IntArray(16) { -1 }
-                for (s0 in 0 until 16) {
-                    if (row[s0] == enc) {
-                        val L = rowLen[s0]
-                        for (s in s0 until minOf(16, s0 + L)) {
-                            if (cover[s] == -1) cover[s] = s0
-                        }
-                    }
-                }
-
-                val pc = ((pitchOff % 12) + 12) % 12
-                val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .width(26.dp)
-                            .height(20.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(if (blackKey) Color(0xFF0A1214) else Color(0xFFBFE6E2))
-                            .clickable { onAudition(selectedPad, pitchOff) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
-                            color = if (blackKey) Color.White else Color.Black,
-                            fontSize = 7.sp
-                        )
-                    }
-
-                    for (step in 0 until 16) {
-                        val isNote = cover[step] >= 0
-                        val isStart = cover[step] == step
-
-                        val bg = when {
-                            isNote -> padColor(selectedPad)
-                            playing && step == playhead -> Color(0xFF27464B)
-                            step % 4 == 0 -> Color(0xFF1B3236)
-                            else -> Color(0xFF0F1B1E)
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(20.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(bg)
-                                .clickable {
-                                    onToggleRollCell(selectedPad, step, enc)
-                                }
-                        ) {
-                            if (isStart) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(3.dp)
-                                        .background(Color(0xFFFFFFFF))
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SequencerGrid(
-    pattern: List<Int>,
-    onToggleStep: (Int, Int) -> Unit,
+    onMasterPan: (Float) -> Unit,
+    levels: FloatArray,
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
-    onSoloToggle: (Int) -> Unit,
-    playhead: Int,
-    playing: Boolean
+    onSoloToggle: (Int) -> Unit
 ) {
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        for (pad in 0 until 16) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
+        for (ch in 0 until 5) {
+            val pad = mixAssign[ch]
+            val lvl = if (levels.size > pad) levels[pad] else 0f
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(C_DARK)
+                    .padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .width(24.dp)
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF152528))
-                        .clickable { onMuteToggle(pad) },
+                        .fillMaxWidth()
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(C_DARK)
+                        .clickable { onMixAssignCycle(ch) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("M", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    Text("BUS ${'A' + ch}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }
 
                 Box(
                     modifier = Modifier
-                        .width(24.dp)
+                        .fillMaxWidth()
                         .height(26.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (solos[pad]) Color(0xFFFDD835) else Color(0xFF152528))
-                        .clickable { onSoloToggle(pad) },
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF3A2F55))
+                        .clickable { onMixAssignCycle(ch) },
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        "S",
-                        color = if (solos[pad]) Color.Black else Color.White,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("P${pad + 1}", color = Color.White, fontSize = 10.sp)
                 }
 
-                for (step in 0 until 16) {
-                    val on = (pattern[pad] ushr step) and 1 == 1
-                    val offColor = when {
-                        playing && step == playhead -> Color(0xFF27464B)
-                        step % 4 == 0 -> Color(0xFF1B3236)
-                        else -> Color(0xFF0F1B1E)
-                    }
+                VMeter(
+                    level = lvl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                )
 
+                Fader(
+                    value = volOf(pad),
+                    range = 0f..150f,
+                    onValueChange = { onVol(pad, it) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Fader(
+                    value = panOf(pad),
+                    range = 0f..100f,
+                    onValueChange = { onPan(pad, it) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(
                         modifier = Modifier
-                            .weight(1f)
-                            .height(26.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(if (on) padColor(pad) else offColor)
-                            .clickable { onToggleStep(pad, step) }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun EditorView(
-    selectedPad: Int,
-    onSelectPad: (Int) -> Unit,
-    loadedPads: Set<Int>,
-    peaks: FloatArray,
-    loopStart: Float,
-    loopEnd: Float,
-    onLoopStart: (Float) -> Unit,
-    onLoopEnd: (Float) -> Unit,
-    loopOn: Boolean,
-    onLoopToggle: () -> Unit,
-    onTrim: () -> Unit,
-    onPlayDown: () -> Unit,
-    onPlayUp: () -> Unit,
-    padPitch: Float,
-    onPadPitch: (Float) -> Unit,
-    padAttack: Float,
-    onPadAttack: (Float) -> Unit,
-    padDecay: Float,
-    onPadDecay: (Float) -> Unit,
-    padSustain: Float,
-    onPadSustain: (Float) -> Unit,
-    padReleaseMs: Float,
-    onPadReleaseMs: (Float) -> Unit,
-    padVol: Float,
-    onPadVol: (Float) -> Unit,
-    padPan: Float,
-    onPadPan: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            for (pad in 0 until 16) {
-                val bg = when {
-                    pad == selectedPad -> Color.White
-                    loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF101C1F)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(bg)
-                        .clickable { onSelectPad(pad) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${pad + 1}",
-                        color = if (pad == selectedPad) Color.Black else Color.White,
-                        fontSize = 8.sp
-                    )
-                }
-            }
-        }
-
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(100.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF0F1B1E))
-        ) {
-            val w = size.width
-            val h = size.height
-
-            if (peaks.isNotEmpty()) {
-                val lx = loopStart / 100f * w
-                val rx = loopEnd / 100f * w
-
-                drawRect(
-                    color = Color(0x33FFFFFF),
-                    topLeft = Offset(lx, 0f),
-                    size = Size(rx - lx, h)
-                )
-
-                val n = peaks.size
-                val barW = w / n
-
-                for (i in 0 until n) {
-                    val x = (i + 0.5f) * w / n
-                    val p = peaks[i].coerceIn(0f, 1f) * (h / 2f)
-
-                    drawLine(
-                        color = Color(0xFF2DD4BF),
-                        start = Offset(x, h / 2f - p),
-                        end = Offset(x, h / 2f + p),
-                        strokeWidth = barW
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "LOOP START ${loopStart.toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = loopStart,
-                    onValueChange = onLoopStart,
-                    valueRange = 0f..100f
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "LOOP END ${loopEnd.toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = loopEnd,
-                    onValueChange = onLoopEnd,
-                    valueRange = 0f..100f
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "PITCH ${padPitch.toInt()} st",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padPitch,
-                    onValueChange = onPadPitch,
-                    valueRange = -12f..12f,
-                    steps = 23
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "ATTACK ${padAttack.toInt()} ms",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padAttack,
-                    onValueChange = onPadAttack,
-                    valueRange = 0f..500f
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "DECAY ${padDecay.toInt()} ms",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padDecay,
-                    onValueChange = onPadDecay,
-                    valueRange = 0f..1000f
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "SUSTAIN ${padSustain.toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padSustain,
-                    onValueChange = onPadSustain,
-                    valueRange = 0f..100f
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "VOL ${padVol.toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padVol,
-                    onValueChange = onPadVol,
-                    valueRange = 0f..150f
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "PAN ${padPan.toInt()}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padPan,
-                    onValueChange = onPadPan,
-                    valueRange = 0f..100f
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "RELEASE ${padReleaseMs.toInt()} ms",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padReleaseMs,
-                    onValueChange = onPadReleaseMs,
-                    valueRange = 0f..1000f
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Button(onClick = onLoopToggle) {
-                    Text(if (loopOn) "LOOP ON" else "LOOP OFF")
-                }
-
-                Button(onClick = onTrim) {
-                    Text("TRIM")
-                }
-            }
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF2DD4BF))
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            onPlayDown()
-                            tryAwaitRelease()
-                            onPlayUp()
-                        }
-                    )
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "PLAY (hold)",
-                color = Color(0xFF06201D),
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-@Composable
-fun Pad(
-    index: Int,
-    hasSample: Boolean,
-    flash: Boolean,
-    onPadDown: (Int) -> Unit,
-    onPadUp: (Int) -> Unit,
-    onPadLongPress: (Int) -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clip(RoundedCornerShape(20.dp))
-            .background(if (flash) Color.White else padColor(index))
-            .pointerInput(index) {
-                detectTapGestures(
-                    onPress = {
-                        onPadDown(index)
-                        tryAwaitRelease()
-                        onPadUp(index)
-                    },
-                    onLongPress = {
-                        onPadLongPress(index)
-                    }
-                )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = if (hasSample) "WAV ${index + 1}" else "PAD ${index + 1}",
-            color = Color.Black,
-            style = MaterialTheme.typography.titleMedium
-        )
-    }
-}
