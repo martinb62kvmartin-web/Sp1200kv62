@@ -1796,11 +1796,8 @@ fun Sp1200App(
                 onBpmChange = onBpmChange,
                 swing = swing,
                 onSwingChange = onSwingChange,
-                stretch = stretchBanks[bank][selectedPad],
-                onStretch = { v ->
-                    stretchBanks = stretchBanks.set2(bank, selectedPad, v)
-                    nativeSetPadStretch(selectedPad, v)
-                }
+                stretch = stretch,
+                onStretch = onStretch
             )
         }
     }
