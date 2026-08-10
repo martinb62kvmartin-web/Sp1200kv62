@@ -2,12 +2,9 @@ import io
 import os
 import sys
 
+# Кортеж: (путь, старый, новый) или (путь, старый, новый, True) — True = пропускать, если не найдено.
 PATCHES = [
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        "color = Color(0xFF141428)",
-        "color = Color(0xFF0C1416)"
-    ),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "color = Color(0xFF141428)", "color = Color(0xFF0C1416)", True),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """        colors = ButtonDefaults.buttonColors(
@@ -15,7 +12,8 @@ PATCHES = [
         ),""",
         """        colors = ButtonDefaults.buttonColors(
             containerColor = if (active) Color(0xFF2DD4BF) else Color(0xFF152528)
-        ),"""
+        ),""",
+        True
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
@@ -30,14 +28,16 @@ PATCHES = [
             color = if (active) Color(0xFF06201D) else Color(0xFFBFE6E2),
             fontSize = 10.sp,
             maxLines = 1
-        )"""
+        )""",
+        True
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """            style = MaterialTheme.typography.titleLarge,
             color = Color(0xFF4FC3F7)""",
         """            style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFF2DD4BF)"""
+            color = Color(0xFF2DD4BF)""",
+        True
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
@@ -68,65 +68,48 @@ PATCHES = [
     13 -> Color(0xFFA3E635)
     14 -> Color(0xFF34D399)
     else -> Color(0xFF22D3EE)
-}"""
+}""",
+        True
     ),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF3A3A3A)", "Color(0xFF1B3236)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF3A3A3A)", "Color(0xFF1B3236)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262626)", "Color(0xFF0F1B1E)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262626)", "Color(0xFF0F1B1E)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF5A5A7A)", "Color(0xFF27464B)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF5A5A7A)", "Color(0xFF27464B)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF333333)", "Color(0xFF152528)"),
-    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF333333)", "Color(0xFF152528)"),
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        ".background(Color(0xFF1E1E1E))",
-        ".background(Color(0xFF0F1B1E))"
-    ),
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        ".background(Color(0xFF4FC3F7))",
-        ".background(Color(0xFF2DD4BF))"
-    ),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFE91E5A)", "Color(0xFF2DD4BF)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262636)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF2A2A2A)", "Color(0xFF101C1F)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF3A3A3A)", "Color(0xFF1B3236)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF3A3A3A)", "Color(0xFF1B3236)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262626)", "Color(0xFF0F1B1E)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF262626)", "Color(0xFF0F1B1E)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF5A5A7A)", "Color(0xFF27464B)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF5A5A7A)", "Color(0xFF27464B)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF333333)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF333333)", "Color(0xFF152528)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", ".background(Color(0xFF1E1E1E))", ".background(Color(0xFF0F1B1E))", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", ".background(Color(0xFF4FC3F7))", ".background(Color(0xFF2DD4BF))", True),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """                        color = Color(0xFF4FC3F7),
                         start = Offset""",
         """                        color = Color(0xFF2DD4BF),
-                        start = Offset"""
+                        start = Offset""",
+        True
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """                text = "MASTER",
                 color = Color(0xFF4FC3F7),""",
         """                text = "MASTER",
-                color = Color(0xFF2DD4BF),"""
+                color = Color(0xFF2DD4BF),""",
+        True
     ),
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        "Color(0xFF1A1A2E)",
-        "Color(0xFF0A1214)"
-    ),
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        "Color(0xFFDDDDEE)",
-        "Color(0xFFBFE6E2)"
-    ),
-    (
-        "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        "Color(0xFF3A3A5A)",
-        "Color(0xFF1B3236)"
-    ),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF1A1A2E)", "Color(0xFF0A1214)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFFDDDDEE)", "Color(0xFFBFE6E2)", True),
+    ("app/src/main/java/com/example/sp1200/MainActivity.kt", "Color(0xFF3A3A5A)", "Color(0xFF1B3236)", True),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """            Text(
@@ -134,7 +117,8 @@ PATCHES = [
                 color = Color.Black,""",
         """            Text(
                 text = "PLAY (hold)",
-                color = Color(0xFF06201D),"""
+                color = Color(0xFF06201D),""",
+        True
     ),
 ]
 
@@ -143,7 +127,10 @@ def main():
         print("No patches to apply.")
         return
 
-    for path, old, new in PATCHES:
+    for item in PATCHES:
+        optional = len(item) == 4 and item[3]
+        path, old, new = item[0], item[1], item[2]
+
         if not os.path.exists(path):
             print("ERROR: missing file", path)
             sys.exit(1)
@@ -152,6 +139,9 @@ def main():
             text = f.read()
 
         if old not in text:
+            if optional:
+                print("Skipped (not found):", old[:60].replace("\n", " "))
+                continue
             print("ERROR: pattern not found in", path)
             print("PATTERN:", old[:120])
             sys.exit(1)
@@ -161,6 +151,6 @@ def main():
         with io.open(path, "w", encoding="utf-8") as f:
             f.write(text)
 
-        print("Patched:", path)
+        print("Patched:", old[:60].replace("\n", " "))
 
 main()
