@@ -50,6 +50,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,6 +66,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
@@ -191,6 +194,7 @@ class MainActivity : ComponentActivity() {
     private var exporting by mutableStateOf(false)
     private var exportWasPlaying = false
     private var reverseBanks by mutableStateOf(List(4) { List(16) { false } })
+    private var padPeaks by mutableStateOf(List(16) { FloatArray(0) })
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
@@ -216,6 +220,12 @@ class MainActivity : ComponentActivity() {
             ?.map { it.name }
             ?.sorted()
             ?: emptyList()
+    }
+
+    private fun refreshPadPeaks() {
+        padPeaks = (0 until 16).map { i ->
+            if (loadedBanks[bank].contains(i)) nativeGetPeaks(i, 48) else FloatArray(0)
+        }
     }
 
     private fun isRiffWav(f: File): Boolean {
@@ -487,6 +497,7 @@ class MainActivity : ComponentActivity() {
                     if (pad == selectedPad) {
                         peaks = nativeGetPeaks(pad, 200)
                     }
+                    refreshPadPeaks()
                     Toast.makeText(this, "PAD ${pad + 1}: $name", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this, "Load failed: $name", Toast.LENGTH_SHORT).show()
@@ -626,6 +637,7 @@ class MainActivity : ComponentActivity() {
                 loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + selectedPad }
                 peaks = nativeGetPeaks(selectedPad, 200)
                 refreshLib()
+                refreshPadPeaks()
                 Toast.makeText(this, "Recorded to PAD ${selectedPad + 1}", Toast.LENGTH_SHORT).show()
             }
         } else {
@@ -1053,6 +1065,7 @@ class MainActivity : ComponentActivity() {
                         if (pad == selectedPad) {
                             peaks = nativeGetPeaks(pad, 200)
                         }
+                        refreshPadPeaks()
                         Toast.makeText(this, "PAD ${pad + 1}: sample loaded", Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(this, "Need PCM 16-bit WAV", Toast.LENGTH_SHORT).show()
@@ -1074,12 +1087,14 @@ class MainActivity : ComponentActivity() {
         pushAllToNative()
         restoreSamples()
         refreshLib()
+        refreshPadPeaks()
+        peaks = nativeGetPeaks(selectedPad, 200)
 
         midiManager = getSystemService(MIDI_SERVICE) as MidiManager
 
         setContent {
-            androidx.compose.material3.MaterialTheme {
-                androidx.compose.material3.Surface(
+            MaterialTheme {
+                Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = C_BG
                 ) {
@@ -1096,21 +1111,12 @@ class MainActivity : ComponentActivity() {
                             gateMode = enabled
                             nativeSetGateMode(enabled)
                         },
-                        pitch = pitch,
-                        onPitchChange = { value ->
-                            pitch = value
-                            nativeSetPitch(value)
-                        },
-                        crunch = crunch,
-                        onCrunchChange = { enabled ->
-                            crunch = enabled
-                            nativeSetCrunch(enabled)
-                        },
                         bank = bank,
                         onBankChange = { b ->
                             bank = b
                             nativeSetBank(b)
                             peaks = nativeGetPeaks(selectedPad, 200)
+                            refreshPadPeaks()
                         },
                         view = view,
                         onViewChange = { view = it },
@@ -1255,6 +1261,7 @@ class MainActivity : ComponentActivity() {
                             peaks = nativeGetPeaks(pad, 200)
                         },
                         peaks = peaks,
+                        padPeaks = padPeaks,
                         loopStart = loopStartBanks[bank][selectedPad],
                         loopEnd = loopEndBanks[bank][selectedPad],
                         onLoopStart = { value ->
@@ -1262,12 +1269,6 @@ class MainActivity : ComponentActivity() {
                             val clamped = if (value > end - 1f) end - 1f else value
                             loopStartBanks = loopStartBanks.set2(bank, selectedPad, clamped)
                             nativeSetLoopPoints(selectedPad, clamped / 100f, end / 100f)
-                        },
-                        onLoopEnd = { value ->
-                            val start = loopStartBanks[bank][selectedPad]
-                            val clamped = if (value < start + 1f) start + 1f else value
-                            loopEndBanks = loopEndBanks.set2(bank, selectedPad, clamped)
-                            nativeSetLoopPoints(selectedPad, start / 100f, clamped / 100f)
                         },
                         loopOn = loopOnBanks[bank][selectedPad],
                         onLoopToggle = {
@@ -1282,6 +1283,7 @@ class MainActivity : ComponentActivity() {
                                 loopEndBanks = loopEndBanks.set2(bank, selectedPad, 100f)
                                 nativeSetLoopPoints(selectedPad, 0f, 1f)
                                 peaks = nativeGetPeaks(selectedPad, 200)
+                                refreshPadPeaks()
                                 Toast.makeText(this, "Trimmed", Toast.LENGTH_SHORT).show()
                             }
                         },
@@ -1291,6 +1293,7 @@ class MainActivity : ComponentActivity() {
                                 it[bank] = it[bank] - selectedPad
                             }
                             peaks = FloatArray(0)
+                            refreshPadPeaks()
                         },
                         reverse = reverseBanks[bank][selectedPad],
                         onReverseToggle = {
@@ -1313,7 +1316,12 @@ class MainActivity : ComponentActivity() {
                             panBanks = panBanks.toMutableList().also { it[selectedPad] = value }
                             nativeSetPadPan(selectedPad, (value - 50f) / 50f)
                         },
-                        pollTick = pollTick
+                        pollTick = pollTick,
+                        crunch = crunch,
+                        onCrunchChange = { enabled ->
+                            crunch = enabled
+                            nativeSetCrunch(enabled)
+                        }
                     )
                 }
             }
@@ -1378,7 +1386,8 @@ fun KBtn(
             text = label,
             color = if (active) Color.White else C_PINK,
             fontWeight = FontWeight.Bold,
-            fontSize = 12.sp
+            fontSize = 11.sp,
+            maxLines = 1
         )
     }
 }
@@ -1392,7 +1401,7 @@ fun RowScope.TabBtn(
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(40.dp)
+            .height(38.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (active) C_PINK else C_DARK)
             .clickable { onClick() },
@@ -1402,7 +1411,8 @@ fun RowScope.TabBtn(
             text = label,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            fontSize = 11.sp
+            fontSize = 10.sp,
+            maxLines = 1
         )
     }
 }
@@ -1419,7 +1429,7 @@ fun Fader(
 
     BoxWithConstraints(
         modifier = modifier
-            .height(32.dp)
+            .height(30.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(C_DARK)
             .pointerInput(value, range.start, range.endInclusive) {
@@ -1431,13 +1441,12 @@ fun Fader(
             }
     ) {
         val w = constraints.maxWidth
-        val capW = 18
-        val x = (frac * (w - capW)).toInt()
+        val x = (frac * (w - 20)).toInt()
 
         Box(
             modifier = Modifier
-                .offset(x = androidx.compose.ui.unit.IntOffset(x, 0))
-                .width(18.dp)
+                .offset { IntOffset(x, 0) }
+                .width(20.dp)
                 .fillMaxHeight()
                 .background(C_CYAN)
         )
@@ -1457,7 +1466,7 @@ fun Knob(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             modifier = Modifier
-                .size(64.dp)
+                .size(62.dp)
                 .clip(CircleShape)
                 .background(Color.White)
                 .pointerInput(value, range.start, range.endInclusive) {
@@ -1472,12 +1481,12 @@ fun Knob(
                 modifier = Modifier
                     .rotate(-135f + frac * 270f)
                     .width(3.dp)
-                    .height(26.dp)
-                    .offset(y = (-16).dp)
+                    .height(24.dp)
+                    .offset(y = (-15).dp)
                     .background(Color.Black)
             )
         }
-        Text(label, color = C_PINK, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+        Text(label, color = C_PINK, fontWeight = FontWeight.Bold, fontSize = 10.sp)
     }
 }
 
@@ -1552,10 +1561,6 @@ fun Sp1200App(
     loadedPads: Set<Int>,
     gateMode: Boolean,
     onGateModeChange: (Boolean) -> Unit,
-    pitch: Float,
-    onPitchChange: (Float) -> Unit,
-    crunch: Boolean,
-    onCrunchChange: (Boolean) -> Unit,
     bank: Int,
     onBankChange: (Int) -> Unit,
     view: Int,
@@ -1606,6 +1611,7 @@ fun Sp1200App(
     selectedPad: Int,
     onSelectPad: (Int) -> Unit,
     peaks: FloatArray,
+    padPeaks: List<FloatArray>,
     loopStart: Float,
     loopEnd: Float,
     onLoopStart: (Float) -> Unit,
@@ -1621,12 +1627,10 @@ fun Sp1200App(
     onPadVol: (Float) -> Unit,
     padPan: Float,
     onPadPan: (Float) -> Unit,
-    pollTick: Int
+    pollTick: Int,
+    crunch: Boolean,
+    onCrunchChange: (Boolean) -> Unit
 ) {
-    val padPeaks = remember(bank, loadedPads) {
-        (0 until 16).map { i -> if (loadedPads.contains(i)) nativeGetPeaksSafe(i, 48) else FloatArray(0) }
-    }
-
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1752,15 +1756,6 @@ fun Sp1200App(
     }
 }
 
-fun nativeGetPeaksSafe(pad: Int, buckets: Int): FloatArray {
-    return try {
-        // вызов через activity невозможен здесь; используем пустой массив как заглушку
-        FloatArray(0)
-    } catch (_: Exception) {
-        FloatArray(0)
-    }
-}
-
 @Composable
 fun SampleView(
     selectedPad: Int,
@@ -1819,47 +1814,42 @@ fun SampleView(
                     shake = if (flashes[selectedPad]) pollTick else 0,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(160.dp)
+                        .height(150.dp)
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    KBtn(
-                        "<", false,
-                        { onSelectPad((selectedPad + 15) % 16) },
-                        Modifier.size(40.dp)
-                    )
-                    KBtn("ONE SHOT", !gateMode, { onGateModeChange(!gateMode) }, Modifier.weight(1f).height(44.dp))
-                    KBtn("REVERSE", reverse, { onReverseToggle() }, Modifier.weight(1f).height(44.dp))
-                    KBtn("LOOP", loopOn, { onLoopToggle() }, Modifier.weight(1f).height(44.dp))
-                    KBtn(
-                        ">", false,
-                        { onSelectPad((selectedPad + 1) % 16) },
-                        Modifier.size(40.dp)
-                    )
+                    KBtn("<", false, { onSelectPad((selectedPad + 15) % 16) }, Modifier.size(38.dp))
+                    KBtn("ONE SHOT", !gateMode, { onGateModeChange(!gateMode) }, Modifier.weight(1f).height(42.dp))
+                    KBtn("REVERSE", reverse, { onReverseToggle() }, Modifier.weight(1f).height(42.dp))
+                    KBtn("LOOP", loopOn, { onLoopToggle() }, Modifier.weight(1f).height(42.dp))
+                    KBtn(">", false, { onSelectPad((selectedPad + 1) % 16) }, Modifier.size(38.dp))
                 }
             }
         }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Knob("VOL", padVol, 0f..150f, onPadVol)
             Knob("PITCH", padPitch, -12f..12f, onPadPitch)
             Knob("PAN", padPan, 0f..100f, onPadPan)
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                KBtn("EDIT", false, onTrim, Modifier.fillMaxWidth().height(38.dp))
-                KBtn("DELETE", false, onDelete, Modifier.fillMaxWidth().height(38.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                KBtn("TRIM", false, onTrim, Modifier.fillMaxWidth().height(36.dp))
+                KBtn("DELETE", false, onDelete, Modifier.fillMaxWidth().height(36.dp))
             }
         }
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(4),
-            modifier = Modifier.height(520.dp),
+            modifier = Modifier.height(560.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -1874,7 +1864,7 @@ fun SampleView(
                         .background(
                             if (index == selectedPad) C_CYAN
                             else if (has) C_PINK.copy(alpha = 0.75f)
-                            else C_PINK.copy(alpha = 0.45f)
+                            else C_PINK.copy(alpha = 0.4f)
                         )
                         .pointerInput(index) {
                             detectTapGestures(
@@ -1896,14 +1886,6 @@ fun SampleView(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(6.dp)
-                        )
-                    }
-                    if (index == selectedPad) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color.Transparent)
                         )
                     }
                     Text(
@@ -1950,70 +1932,4 @@ fun MixView(
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
-    onSoloToggle: (Int) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        for (ch in 0 until 5) {
-            val pad = mixAssign[ch]
-            val lvl = if (levels.size > pad) levels[pad] else 0f
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(C_DARK)
-                    .padding(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(C_DARK)
-                        .clickable { onMixAssignCycle(ch) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("BUS ${'A' + ch}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF3A2F55))
-                        .clickable { onMixAssignCycle(ch) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("P${pad + 1}", color = Color.White, fontSize = 10.sp)
-                }
-
-                VMeter(
-                    level = lvl,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                )
-
-                Fader(
-                    value = volOf(pad),
-                    range = 0f..150f,
-                    onValueChange = { onVol(pad, it) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Fader(
-                    value = panOf(pad),
-                    range = 0f..100f,
-                    onValueChange = { onPan(pad, it) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(
-                        modifier = Modifier
+    onSolo
