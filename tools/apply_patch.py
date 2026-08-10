@@ -34,11 +34,9 @@ PATCHES = [
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """            text = "SP-1200 v2",
-            style = MaterialTheme.typography.titleLarge,
+        """            style = MaterialTheme.typography.titleLarge,
             color = Color(0xFF4FC3F7)""",
-        """            text = "SP-1200 v2",
-            style = MaterialTheme.typography.titleLarge,
+        """            style = MaterialTheme.typography.titleLarge,
             color = Color(0xFF2DD4BF)"""
     ),
     (
