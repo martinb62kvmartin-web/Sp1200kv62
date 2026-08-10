@@ -43,7 +43,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -117,6 +119,10 @@ class MainActivity : ComponentActivity() {
         sustain: Float,
         release: Float
     )
+    private external fun nativeSetPadVol(padIndex: Int, vol: Float)
+    private external fun nativeSetPadPan(padIndex: Int, pan: Float)
+    private external fun nativeSetMasterVol(vol: Float)
+    private external fun nativeSetMasterPan(pan: Float)
     private external fun nativeSetMidiMode(mode: Int)
     private external fun nativeMidiTick()
     private external fun nativeMidiStart()
@@ -141,8 +147,9 @@ class MainActivity : ComponentActivity() {
     private var lastTicks = 0L
 
     private val pollHandler = Handler(Looper.getMainLooper())
-    private var prevHits = MutableList(8) { 0L }
+    private var prevHits = MutableList(16) { 0L }
 
+    private var pendingPad by mutableStateOf(-1)
     private var bank by mutableStateOf(0)
     private var loadedBanks by mutableStateOf(List(4) { setOf<Int>() })
     private var gateMode by mutableStateOf(false)
@@ -152,34 +159,39 @@ class MainActivity : ComponentActivity() {
     private var playing by mutableStateOf(false)
     private var bpm by mutableStateOf(90f)
     private var swing by mutableStateOf(0f)
-    private var patternBanks by mutableStateOf(List(4) { List(8) { 0 } })
-    private var rollBanks by mutableStateOf(List(4) { List(8) { List(16) { 0 } } })
-    private var rollLenBanks by mutableStateOf(List(4) { List(8) { List(16) { 0 } } })
+    private var patternBanks by mutableStateOf(List(4) { List(16) { 0 } })
+    private var rollBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
+    private var rollLenBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
     private var noteLen by mutableStateOf(1)
-    private var mutes by mutableStateOf(List(8) { false })
-    private var solos by mutableStateOf(List(8) { false })
+    private var mutes by mutableStateOf(List(16) { false })
+    private var solos by mutableStateOf(List(16) { false })
     private var midiMode by mutableStateOf(0)
     private var midiDeviceName by mutableStateOf("none")
     private var recording by mutableStateOf(false)
     private var playhead by mutableStateOf(0)
     private var pollTick by mutableStateOf(0)
-    private var hitTimes by mutableStateOf(List(8) { 0L })
+    private var hitTimes by mutableStateOf(List(16) { 0L })
     private var libFiles by mutableStateOf(listOf<String>())
+    private var mixAssign by mutableStateOf(List(5) { it })
+    private var volBanks by mutableStateOf(List(16) { 100f })
+    private var panBanks by mutableStateOf(List(16) { 50f })
+    private var masterVol by mutableStateOf(100f)
+    private var masterPan by mutableStateOf(50f)
     private var exportBars by mutableStateOf(2)
     private var exporting by mutableStateOf(false)
     private var exportWasPlaying = false
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
-    private var loopStartBanks by mutableStateOf(List(4) { List(8) { 0f } })
-    private var loopEndBanks by mutableStateOf(List(4) { List(8) { 100f } })
-    private var loopOnBanks by mutableStateOf(List(4) { List(8) { false } })
+    private var loopStartBanks by mutableStateOf(List(4) { List(16) { 0f } })
+    private var loopEndBanks by mutableStateOf(List(4) { List(16) { 100f } })
+    private var loopOnBanks by mutableStateOf(List(4) { List(16) { false } })
 
-    private var pitchBanks by mutableStateOf(List(4) { List(8) { 0f } })
-    private var attackBanks by mutableStateOf(List(4) { List(8) { 0f } })
-    private var decayBanks by mutableStateOf(List(4) { List(8) { 0f } })
-    private var sustainBanks by mutableStateOf(List(4) { List(8) { 100f } })
-    private var releaseBanks by mutableStateOf(List(4) { List(8) { 50f } })
+    private var pitchBanks by mutableStateOf(List(4) { List(16) { 0f } })
+    private var attackBanks by mutableStateOf(List(4) { List(16) { 0f } })
+    private var decayBanks by mutableStateOf(List(4) { List(16) { 0f } })
+    private var sustainBanks by mutableStateOf(List(4) { List(16) { 100f } })
+    private var releaseBanks by mutableStateOf(List(4) { List(16) { 50f } })
 
     private fun libraryDir(): File {
         val dir = File(filesDir, "library")
@@ -667,6 +679,10 @@ class MainActivity : ComponentActivity() {
             root.put("pitch", pitch)
             root.put("mutes", JSONArray(mutes))
             root.put("solos", JSONArray(solos))
+            root.put("vol", JSONArray(volBanks))
+            root.put("pan", JSONArray(panBanks))
+            root.put("mvol", masterVol)
+            root.put("mpan", masterPan)
 
             val banksArr = JSONArray()
             for (b in 0 until 4) {
@@ -675,7 +691,7 @@ class MainActivity : ComponentActivity() {
 
                 val rollArr = JSONArray()
                 val rollLenArr = JSONArray()
-                for (p in 0 until 8) {
+                for (p in 0 until 16) {
                     rollArr.put(JSONArray(rollBanks[b][p]))
                     rollLenArr.put(JSONArray(rollLenBanks[b][p]))
                 }
@@ -683,7 +699,7 @@ class MainActivity : ComponentActivity() {
                 bo.put("rolllen", rollLenArr)
 
                 val loopsArr = JSONArray()
-                for (p in 0 until 8) {
+                for (p in 0 until 16) {
                     val lo = JSONObject()
                     lo.put("s", loopStartBanks[b][p])
                     lo.put("e", loopEndBanks[b][p])
@@ -693,7 +709,7 @@ class MainActivity : ComponentActivity() {
                 bo.put("loops", loopsArr)
 
                 val paramsArr = JSONArray()
-                for (p in 0 until 8) {
+                for (p in 0 until 16) {
                     val po = JSONObject()
                     po.put("p", pitchBanks[b][p])
                     po.put("a", attackBanks[b][p])
@@ -727,11 +743,19 @@ class MainActivity : ComponentActivity() {
             pitch = root.optDouble("pitch", 0.0).toFloat()
 
             root.optJSONArray("mutes")?.let { m ->
-                mutes = (0 until 8).map { m.optBoolean(it, false) }
+                mutes = (0 until 16).map { m.optBoolean(it, false) }
             }
             root.optJSONArray("solos")?.let { s ->
-                solos = (0 until 8).map { s.optBoolean(it, false) }
+                solos = (0 until 16).map { s.optBoolean(it, false) }
             }
+            root.optJSONArray("vol")?.let { va ->
+                volBanks = (0 until 16).map { va.optDouble(it, 100.0).toFloat() }
+            }
+            root.optJSONArray("pan")?.let { va ->
+                panBanks = (0 until 16).map { va.optDouble(it, 50.0).toFloat() }
+            }
+            masterVol = root.optDouble("mvol", 100.0).toFloat()
+            masterPan = root.optDouble("mpan", 50.0).toFloat()
 
             val banksArr = root.optJSONArray("banks") ?: return
 
@@ -751,12 +775,12 @@ class MainActivity : ComponentActivity() {
                 val bo = banksArr.optJSONObject(b) ?: continue
 
                 bo.optJSONArray("patterns")?.let { pat ->
-                    newPatterns[b] = (0 until 8).map { pat.optInt(it, 0) }
+                    newPatterns[b] = (0 until 16).map { pat.optInt(it, 0) }
                 }
 
                 bo.optJSONArray("roll")?.let { ra ->
                     val rows = rollBanks[b].toMutableList()
-                    for (p in 0 until minOf(8, ra.length())) {
+                    for (p in 0 until minOf(16, ra.length())) {
                         val st = ra.optJSONArray(p) ?: continue
                         rows[p] = (0 until 16).map { st.optInt(it, 0) }
                     }
@@ -765,7 +789,7 @@ class MainActivity : ComponentActivity() {
 
                 bo.optJSONArray("rolllen")?.let { ra ->
                     val rows = rollLenBanks[b].toMutableList()
-                    for (p in 0 until minOf(8, ra.length())) {
+                    for (p in 0 until minOf(16, ra.length())) {
                         val st = ra.optJSONArray(p) ?: continue
                         rows[p] = (0 until 16).map { st.optInt(it, 0) }
                     }
@@ -773,7 +797,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 bo.optJSONArray("loops")?.let { la ->
-                    for (p in 0 until minOf(8, la.length())) {
+                    for (p in 0 until minOf(16, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
                         newLS[b] = newLS[b].toMutableList().also { it[p] = lo.optDouble("s", 0.0).toFloat() }
                         newLE[b] = newLE[b].toMutableList().also { it[p] = lo.optDouble("e", 100.0).toFloat() }
@@ -782,7 +806,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 bo.optJSONArray("params")?.let { pa ->
-                    for (p in 0 until minOf(8, pa.length())) {
+                    for (p in 0 until minOf(16, pa.length())) {
                         val po = pa.optJSONObject(p) ?: continue
                         newP[b] = newP[b].toMutableList().also { it[p] = po.optDouble("p", 0.0).toFloat() }
                         newA[b] = newA[b].toMutableList().also { it[p] = po.optDouble("a", 0.0).toFloat() }
@@ -815,14 +839,18 @@ class MainActivity : ComponentActivity() {
         nativeSeqSetBpm(bpm)
         nativeSeqSetSwing(swing / 100f)
 
-        for (p in 0 until 8) {
+        for (p in 0 until 16) {
             nativeSetMute(p, mutes[p])
             nativeSetSolo(p, solos[p])
+            nativeSetPadVol(p, volBanks[p] / 100f)
+            nativeSetPadPan(p, (panBanks[p] - 50f) / 50f)
         }
+        nativeSetMasterVol(masterVol / 100f)
+        nativeSetMasterPan((masterPan - 50f) / 50f)
 
         for (b in 0 until 4) {
             nativeSetBank(b)
-            for (p in 0 until 8) {
+            for (p in 0 until 16) {
                 nativeSeqSetMask(p, patternBanks[b][p])
                 for (st in 0 until 16) {
                     nativeSetRoll(p, st, rollBanks[b][p][st], rollLenBanks[b][p][st])
@@ -849,7 +877,7 @@ class MainActivity : ComponentActivity() {
 
         for (b in 0 until 4) {
             nativeSetBank(b)
-            for (p in 0 until 8) {
+            for (p in 0 until 16) {
                 val f = File(dir, "b${b}_p$p.wav")
                 if (f.exists()) {
                     try {
@@ -986,6 +1014,29 @@ class MainActivity : ComponentActivity() {
         sendFn?.invoke(byteArrayOf(b.toByte()))
     }
 
+    private val pickSample =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+            val pad = pendingPad
+            pendingPad = -1
+
+            if (uri != null && pad >= 0) {
+                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    val ok = nativeLoadSample(pad, pfd.fd)
+                    if (ok) {
+                        loadedBanks = loadedBanks.toMutableList().also { it[bank] = it[bank] + pad }
+                        loopStartBanks = loopStartBanks.set2(bank, pad, 0f)
+                        loopEndBanks = loopEndBanks.set2(bank, pad, 100f)
+                        if (pad == selectedPad) {
+                            peaks = nativeGetPeaks(pad, 200)
+                        }
+                        Toast.makeText(this, "PAD ${pad + 1}: sample loaded", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Need PCM 16-bit WAV", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -1006,11 +1057,15 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFF141428)
+                    color = Color(0xFF0C1416)
                 ) {
                     Sp1200App(
                         onPadDown = { nativeTriggerPad(it) },
                         onPadUp = { nativePadRelease(it) },
+                        onPadLongPress = { pad ->
+                            pendingPad = pad
+                            pickSample.launch(arrayOf("audio/*"))
+                        },
                         loadedPads = loadedBanks[bank],
                         gateMode = gateMode,
                         onGateModeChange = { enabled ->
@@ -1139,6 +1194,30 @@ class MainActivity : ComponentActivity() {
                         onImport = { importLauncher.launch(arrayOf("audio/*")) },
                         onPreview = { name -> previewFile(name) },
                         onAssign = { pad, name -> assignFile(pad, name) },
+                        mixAssign = mixAssign,
+                        onMixAssignCycle = { i ->
+                            mixAssign = mixAssign.toMutableList().also { it[i] = (it[i] + 1) % 16 }
+                        },
+                        volOf = { p -> volBanks[p] },
+                        panOf = { p -> panBanks[p] },
+                        onVol = { p, value ->
+                            volBanks = volBanks.toMutableList().also { it[p] = value }
+                            nativeSetPadVol(p, value / 100f)
+                        },
+                        onPan = { p, value ->
+                            panBanks = panBanks.toMutableList().also { it[p] = value }
+                            nativeSetPadPan(p, (value - 50f) / 50f)
+                        },
+                        masterVol = masterVol,
+                        onMasterVol = { value ->
+                            masterVol = value
+                            nativeSetMasterVol(value / 100f)
+                        },
+                        masterPan = masterPan,
+                        onMasterPan = { value ->
+                            masterPan = value
+                            nativeSetMasterPan((value - 50f) / 50f)
+                        },
                         exportBars = exportBars,
                         onExportBarsCycle = {
                             exportBars = when (exportBars) {
@@ -1211,6 +1290,16 @@ class MainActivity : ComponentActivity() {
                         onPadReleaseMs = { value ->
                             releaseBanks = releaseBanks.set2(bank, selectedPad, value)
                             pushPadParams(selectedPad)
+                        },
+                        padVol = volBanks[selectedPad],
+                        onPadVol = { value ->
+                            volBanks = volBanks.toMutableList().also { it[selectedPad] = value }
+                            nativeSetPadVol(selectedPad, value / 100f)
+                        },
+                        padPan = panBanks[selectedPad],
+                        onPadPan = { value ->
+                            panBanks = panBanks.toMutableList().also { it[selectedPad] = value }
+                            nativeSetPadPan(selectedPad, (value - 50f) / 50f)
                         }
                     )
                 }
@@ -1228,7 +1317,7 @@ class MainActivity : ComponentActivity() {
 
                 val now = System.currentTimeMillis()
                 val newTimes = hitTimes.toMutableList()
-                for (i in 0 until 8) {
+                for (i in 0 until 16) {
                     val h = nativeGetPadHits(i)
                     if (h != prevHits[i]) {
                         newTimes[i] = now
@@ -1258,14 +1347,22 @@ class MainActivity : ComponentActivity() {
 }
 
 fun padColor(index: Int): Color = when (index) {
-    0 -> Color(0xFFE53935)
-    1 -> Color(0xFFFB8C00)
-    2 -> Color(0xFFFDD835)
-    3 -> Color(0xFF43A047)
-    4 -> Color(0xFF1E88E5)
-    5 -> Color(0xFF8E24AA)
-    6 -> Color(0xFF00ACC1)
-    else -> Color(0xFF546E7A)
+    0 -> Color(0xFF2DD4BF)
+    1 -> Color(0xFF4CC3E0)
+    2 -> Color(0xFF7FA8F0)
+    3 -> Color(0xFFA78BFA)
+    4 -> Color(0xFFE07FA0)
+    5 -> Color(0xFFF0A45C)
+    6 -> Color(0xFFB8E05C)
+    7 -> Color(0xFF5EEAD4)
+    8 -> Color(0xFF38BDF8)
+    9 -> Color(0xFF818CF8)
+    10 -> Color(0xFFC084FC)
+    11 -> Color(0xFFF472B6)
+    12 -> Color(0xFFFBBF24)
+    13 -> Color(0xFFA3E635)
+    14 -> Color(0xFF34D399)
+    else -> Color(0xFF22D3EE)
 }
 
 @Composable
@@ -1280,13 +1377,13 @@ fun RowScope.SmallButton(
             .weight(1f)
             .height(32.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = if (active) Color(0xFFE91E5A) else Color(0xFF262636)
+            containerColor = if (active) Color(0xFF2DD4BF) else Color(0xFF152528)
         ),
         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = if (active) Color(0xFF06201D) else Color(0xFFBFE6E2),
             fontSize = 10.sp,
             maxLines = 1
         )
@@ -1297,6 +1394,7 @@ fun RowScope.SmallButton(
 fun Sp1200App(
     onPadDown: (Int) -> Unit,
     onPadUp: (Int) -> Unit,
+    onPadLongPress: (Int) -> Unit,
     loadedPads: Set<Int>,
     gateMode: Boolean,
     onGateModeChange: (Boolean) -> Unit,
@@ -1337,6 +1435,16 @@ fun Sp1200App(
     onImport: () -> Unit,
     onPreview: (String) -> Unit,
     onAssign: (Int, String) -> Unit,
+    mixAssign: List<Int>,
+    onMixAssignCycle: (Int) -> Unit,
+    volOf: (Int) -> Float,
+    panOf: (Int) -> Float,
+    onVol: (Int, Float) -> Unit,
+    onPan: (Int, Float) -> Unit,
+    masterVol: Float,
+    onMasterVol: (Float) -> Unit,
+    masterPan: Float,
+    onMasterPan: (Float) -> Unit,
     exportBars: Int,
     onExportBarsCycle: () -> Unit,
     exporting: Boolean,
@@ -1362,7 +1470,11 @@ fun Sp1200App(
     padSustain: Float,
     onPadSustain: (Float) -> Unit,
     padReleaseMs: Float,
-    onPadReleaseMs: (Float) -> Unit
+    onPadReleaseMs: (Float) -> Unit,
+    padVol: Float,
+    onPadVol: (Float) -> Unit,
+    padPan: Float,
+    onPadPan: (Float) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1371,9 +1483,9 @@ fun Sp1200App(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
-            text = "SP-1200 Clone",
+            text = "SP-1200 v3",
             style = MaterialTheme.typography.titleLarge,
-            color = Color(0xFF4FC3F7)
+            color = Color(0xFF2DD4BF)
         )
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1382,6 +1494,7 @@ fun Sp1200App(
             SmallButton("EDIT", view == 2) { onViewChange(2) }
             SmallButton("ROLL", view == 3) { onViewChange(3) }
             SmallButton("LIB", view == 4) { onViewChange(4) }
+            SmallButton("MIX", view == 6) { onViewChange(6) }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1409,7 +1522,7 @@ fun Sp1200App(
 
         Text(
             text = "MIDI: $midiDeviceName",
-            color = Color(0xFF888888),
+            color = Color(0xFF7FA6A3),
             style = MaterialTheme.typography.bodySmall
         )
 
@@ -1496,7 +1609,11 @@ fun Sp1200App(
                 padSustain = padSustain,
                 onPadSustain = onPadSustain,
                 padReleaseMs = padReleaseMs,
-                onPadReleaseMs = onPadReleaseMs
+                onPadReleaseMs = onPadReleaseMs,
+                padVol = padVol,
+                onPadVol = onPadVol,
+                padPan = padPan,
+                onPadPan = onPadPan
             )
 
             3 -> Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -1525,11 +1642,24 @@ fun Sp1200App(
                 onSelectPad = onSelectPad
             )
 
+            6 -> MixView(
+                mixAssign = mixAssign,
+                onMixAssignCycle = onMixAssignCycle,
+                volOf = volOf,
+                panOf = panOf,
+                onVol = onVol,
+                onPan = onPan,
+                masterVol = masterVol,
+                onMasterVol = onMasterVol,
+                masterPan = masterPan,
+                onMasterPan = onMasterPan
+            )
+
             else -> {
                 Text(
-                    text = "Hold = play. Load samples in LIB. Bank: ${'A' + bank}",
+                    text = "Hold = play. Long press = load WAV. Bank: ${'A' + bank}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF888888)
+                    color = Color(0xFF7FA6A3)
                 )
 
                 LazyVerticalGrid(
@@ -1540,13 +1670,14 @@ fun Sp1200App(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(8) { index ->
+                    items(16) { index ->
                         Pad(
                             index = index,
                             hasSample = loadedPads.contains(index),
                             flash = flashes[index],
                             onPadDown = onPadDown,
-                            onPadUp = onPadUp
+                            onPadUp = onPadUp,
+                            onPadLongPress = onPadLongPress
                         )
                     }
                 }
@@ -1575,12 +1706,12 @@ fun LibView(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            for (pad in 0 until 8) {
+            for (pad in 0 until 16) {
                 val bg = when {
-                    armedFile != null -> Color(0xFF3A3A5A)
+                    armedFile != null -> Color(0xFF1B3236)
                     pad == selectedPad -> Color.White
                     loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF2A2A2A)
+                    else -> Color(0xFF101C1F)
                 }
 
                 Box(
@@ -1602,8 +1733,8 @@ fun LibView(
                 ) {
                     Text(
                         text = "${pad + 1}",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodySmall
+                        color = if (pad == selectedPad) Color.Black else Color.White,
+                        fontSize = 8.sp
                     )
                 }
             }
@@ -1620,7 +1751,7 @@ fun LibView(
                 } else {
                     "Tap = play. Hold = pick up, then tap pad"
                 },
-                color = if (armedFile != null) Color(0xFFE91E5A) else Color(0xFF888888),
+                color = if (armedFile != null) Color(0xFF2DD4BF) else Color(0xFF7FA6A3),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1
             )
@@ -1640,7 +1771,7 @@ fun LibView(
                         .fillMaxWidth()
                         .height(44.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (armedFile == name) Color(0xFFE91E5A) else Color(0xFF262636))
+                        .background(if (armedFile == name) Color(0xFF2DD4BF) else Color(0xFF152528))
                         .pointerInput(name) {
                             detectTapGestures(
                                 onTap = {
@@ -1659,10 +1790,85 @@ fun LibView(
                 ) {
                     Text(
                         text = name,
-                        color = Color.White,
+                        color = if (armedFile == name) Color(0xFF06201D) else Color.White,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 12.dp)
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MixView(
+    mixAssign: List<Int>,
+    onMixAssignCycle: (Int) -> Unit,
+    volOf: (Int) -> Float,
+    panOf: (Int) -> Float,
+    onVol: (Int, Float) -> Unit,
+    onPan: (Int, Float) -> Unit,
+    masterVol: Float,
+    onMasterVol: (Float) -> Unit,
+    masterPan: Float,
+    onMasterPan: (Float) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "MASTER",
+                color = Color(0xFF2DD4BF),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.width(64.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text("VOL ${masterVol.toInt()}%", color = Color.White, fontSize = 9.sp)
+                Slider(value = masterVol, onValueChange = onMasterVol, valueRange = 0f..150f)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text("PAN ${masterPan.toInt()}", color = Color.White, fontSize = 9.sp)
+                Slider(value = masterPan, onValueChange = onMasterPan, valueRange = 0f..100f)
+            }
+        }
+
+        for (ch in 0 until 5) {
+            val pad = mixAssign[ch]
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(64.dp)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF152528))
+                        .clickable { onMixAssignCycle(ch) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "CH${ch + 1}:P${pad + 1}",
+                        color = Color.White,
+                        fontSize = 9.sp
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("VOL ${volOf(pad).toInt()}%", color = Color.White, fontSize = 9.sp)
+                    Slider(value = volOf(pad), onValueChange = { onVol(pad, it) }, valueRange = 0f..150f)
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("PAN ${panOf(pad).toInt()}", color = Color.White, fontSize = 9.sp)
+                    Slider(value = panOf(pad), onValueChange = { onPan(pad, it) }, valueRange = 0f..100f)
                 }
             }
         }
@@ -1691,11 +1897,11 @@ fun RollView(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            for (pad in 0 until 8) {
+            for (pad in 0 until 16) {
                 val bg = when {
                     pad == selectedPad -> Color.White
                     loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF2A2A2A)
+                    else -> Color(0xFF101C1F)
                 }
 
                 Box(
@@ -1710,7 +1916,7 @@ fun RollView(
                     Text(
                         text = "${pad + 1}",
                         color = if (pad == selectedPad) Color.Black else Color.White,
-                        style = MaterialTheme.typography.bodySmall
+                        fontSize = 8.sp
                     )
                 }
             }
@@ -1723,7 +1929,7 @@ fun RollView(
             Button(onClick = onNoteLenCycle) { Text("LEN $noteLen") }
             Text(
                 text = "Tap key = hear. Tap cell = note. Tap note = delete",
-                color = Color(0xFF888888),
+                color = Color(0xFF7FA6A3),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1
             )
@@ -1765,7 +1971,7 @@ fun RollView(
                             .width(26.dp)
                             .height(20.dp)
                             .clip(RoundedCornerShape(3.dp))
-                            .background(if (blackKey) Color(0xFF1A1A2E) else Color(0xFFDDDDEE))
+                            .background(if (blackKey) Color(0xFF0A1214) else Color(0xFFBFE6E2))
                             .clickable { onAudition(selectedPad, pitchOff) },
                         contentAlignment = Alignment.Center
                     ) {
@@ -1782,9 +1988,9 @@ fun RollView(
 
                         val bg = when {
                             isNote -> padColor(selectedPad)
-                            playing && step == playhead -> Color(0xFF5A5A7A)
-                            step % 4 == 0 -> Color(0xFF3A3A3A)
-                            else -> Color(0xFF262626)
+                            playing && step == playhead -> Color(0xFF27464B)
+                            step % 4 == 0 -> Color(0xFF1B3236)
+                            else -> Color(0xFF0F1B1E)
                         }
 
                         Box(
@@ -1825,10 +2031,12 @@ fun SequencerGrid(
     playing: Boolean
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        for (pad in 0 until 8) {
+        for (pad in 0 until 16) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -1839,7 +2047,7 @@ fun SequencerGrid(
                         .width(24.dp)
                         .height(26.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF333333))
+                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF152528))
                         .clickable { onMuteToggle(pad) },
                     contentAlignment = Alignment.Center
                 ) {
@@ -1851,7 +2059,7 @@ fun SequencerGrid(
                         .width(24.dp)
                         .height(26.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(if (solos[pad]) Color(0xFFFDD835) else Color(0xFF333333))
+                        .background(if (solos[pad]) Color(0xFFFDD835) else Color(0xFF152528))
                         .clickable { onSoloToggle(pad) },
                     contentAlignment = Alignment.Center
                 ) {
@@ -1865,9 +2073,9 @@ fun SequencerGrid(
                 for (step in 0 until 16) {
                     val on = (pattern[pad] ushr step) and 1 == 1
                     val offColor = when {
-                        playing && step == playhead -> Color(0xFF5A5A7A)
-                        step % 4 == 0 -> Color(0xFF3A3A3A)
-                        else -> Color(0xFF262626)
+                        playing && step == playhead -> Color(0xFF27464B)
+                        step % 4 == 0 -> Color(0xFF1B3236)
+                        else -> Color(0xFF0F1B1E)
                     }
 
                     Box(
@@ -1908,21 +2116,27 @@ fun EditorView(
     padSustain: Float,
     onPadSustain: (Float) -> Unit,
     padReleaseMs: Float,
-    onPadReleaseMs: (Float) -> Unit
+    onPadReleaseMs: (Float) -> Unit,
+    padVol: Float,
+    onPadVol: (Float) -> Unit,
+    padPan: Float,
+    onPadPan: (Float) -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            for (pad in 0 until 8) {
+            for (pad in 0 until 16) {
                 val bg = when {
                     pad == selectedPad -> Color.White
                     loadedPads.contains(pad) -> padColor(pad)
-                    else -> Color(0xFF2A2A2A)
+                    else -> Color(0xFF101C1F)
                 }
 
                 Box(
@@ -1937,7 +2151,7 @@ fun EditorView(
                     Text(
                         text = "${pad + 1}",
                         color = if (pad == selectedPad) Color.Black else Color.White,
-                        style = MaterialTheme.typography.bodySmall
+                        fontSize = 8.sp
                     )
                 }
             }
@@ -1948,7 +2162,7 @@ fun EditorView(
                 .fillMaxWidth()
                 .height(100.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E1E1E))
+                .background(Color(0xFF0F1B1E))
         ) {
             val w = size.width
             val h = size.height
@@ -1971,7 +2185,7 @@ fun EditorView(
                     val p = peaks[i].coerceIn(0f, 1f) * (h / 2f)
 
                     drawLine(
-                        color = Color(0xFF4FC3F7),
+                        color = Color(0xFF2DD4BF),
                         start = Offset(x, h / 2f - p),
                         end = Offset(x, h / 2f + p),
                         strokeWidth = barW
@@ -2080,6 +2294,37 @@ fun EditorView(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
+                    text = "VOL ${padVol.toInt()}%",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padVol,
+                    onValueChange = onPadVol,
+                    valueRange = 0f..150f
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "PAN ${padPan.toInt()}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Slider(
+                    value = padPan,
+                    onValueChange = onPadPan,
+                    valueRange = 0f..100f
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
                     text = "RELEASE ${padReleaseMs.toInt()} ms",
                     color = Color.White,
                     style = MaterialTheme.typography.bodySmall
@@ -2110,7 +2355,7 @@ fun EditorView(
                 .fillMaxWidth()
                 .height(48.dp)
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF4FC3F7))
+                .background(Color(0xFF2DD4BF))
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onPress = {
@@ -2124,7 +2369,7 @@ fun EditorView(
         ) {
             Text(
                 text = "PLAY (hold)",
-                color = Color.Black,
+                color = Color(0xFF06201D),
                 style = MaterialTheme.typography.bodyMedium
             )
         }
@@ -2137,7 +2382,8 @@ fun Pad(
     hasSample: Boolean,
     flash: Boolean,
     onPadDown: (Int) -> Unit,
-    onPadUp: (Int) -> Unit
+    onPadUp: (Int) -> Unit,
+    onPadLongPress: (Int) -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -2151,6 +2397,9 @@ fun Pad(
                         onPadDown(index)
                         tryAwaitRelease()
                         onPadUp(index)
+                    },
+                    onLongPress = {
+                        onPadLongPress(index)
                     }
                 )
             },
