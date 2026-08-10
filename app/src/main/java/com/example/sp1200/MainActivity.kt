@@ -1338,6 +1338,11 @@ class MainActivity : ComponentActivity() {
                             nativeSetPadPan(selectedPad, (value - 50f) / 50f)
                         },
                         pollTick = pollTick,
+                        stretch = stretchBanks[bank][selectedPad],
+                        onStretch = { v ->
+                            stretchBanks = stretchBanks.set2(bank, selectedPad, v)
+                            nativeSetPadStretch(selectedPad, v)
+                        },
                         crunch = crunch,
                         onCrunchChange = { enabled ->
                             crunch = enabled
