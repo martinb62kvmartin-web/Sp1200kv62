@@ -551,10 +551,10 @@ import androidx.compose.foundation.verticalScroll"""
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
         """        for (pad in 0 until 8) {
                 val bg = when {
-                    armedFile != null -> Color(0xFF1B3236)""",
+                    armedFile != null ->""",
         """        for (pad in 0 until 16) {
                 val bg = when {
-                    armedFile != null -> Color(0xFF1B3236)"""
+                    armedFile != null ->"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
