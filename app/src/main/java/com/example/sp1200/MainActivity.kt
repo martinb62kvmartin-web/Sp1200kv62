@@ -1932,4 +1932,347 @@ fun MixView(
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
-    onSolo
+    onSoloToggle: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        for (ch in 0 until 5) {
+            val pad = mixAssign[ch]
+            val lvl = if (levels.size > pad) levels[pad] else 0f
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(C_DARK)
+                    .padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(30.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF3A2F55)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("BUS ${'A' + ch}", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(C_DARK)
+                        .clickable { onMixAssignCycle(ch) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("P${pad + 1}", color = C_CYAN, fontSize = 10.sp)
+                }
+                VMeter(level = lvl, modifier = Modifier.fillMaxWidth().height(200.dp))
+                Fader(value = volOf(pad), range = 0f..150f, onValueChange = { onVol(pad, it) }, modifier = Modifier.fillMaxWidth())
+                Fader(value = panOf(pad), range = 0f..100f, onValueChange = { onPan(pad, it) }, modifier = Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(
+                        modifier = Modifier.weight(1f).height(30.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (mutes[pad]) C_PINK else Color(0xFF3A2F55))
+                            .clickable { onMuteToggle(pad) },
+                        contentAlignment = Alignment.Center
+                    ) { Text("M", color = Color.White, fontSize = 10.sp) }
+                    Box(
+                        modifier = Modifier.weight(1f).height(30.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (solos[pad]) C_CYAN else Color(0xFF3A2F55))
+                            .clickable { onSoloToggle(pad) },
+                        contentAlignment = Alignment.Center
+                    ) { Text("S", color = Color(0xFF06201D), fontSize = 10.sp) }
+                }
+            }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(C_DARK)
+                .padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(30.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color(0xFF3A2F55)),
+                contentAlignment = Alignment.Center
+            ) { Text("MAIN", color = C_PINK, fontWeight = FontWeight.Bold, fontSize = 10.sp) }
+            val ml = if (levels.size > 16) levels[16] else 0f
+            val mrv = if (levels.size > 17) levels[17] else 0f
+            VMeter(level = if (ml > mrv) ml else mrv, modifier = Modifier.fillMaxWidth().height(200.dp))
+            Fader(value = masterVol, range = 0f..150f, onValueChange = onMasterVol, modifier = Modifier.fillMaxWidth())
+            Fader(value = masterPan, range = 0f..100f, onValueChange = onMasterPan, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+fun SequencerGrid(
+    pattern: List<Int>,
+    onToggleStep: (Int, Int) -> Unit,
+    mutes: List<Boolean>,
+    onMuteToggle: (Int) -> Unit,
+    solos: List<Boolean>,
+    onSoloToggle: (Int) -> Unit,
+    playhead: Int,
+    playing: Boolean
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        for (pad in 0 until 16) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier.width(22.dp).height(24.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (mutes[pad]) C_PINK else C_DARK)
+                        .clickable { onMuteToggle(pad) },
+                    contentAlignment = Alignment.Center
+                ) { Text("M", color = Color.White, fontSize = 8.sp) }
+                Box(
+                    modifier = Modifier.width(22.dp).height(24.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (solos[pad]) C_CYAN else C_DARK)
+                        .clickable { onSoloToggle(pad) },
+                    contentAlignment = Alignment.Center
+                ) { Text("S", color = Color(0xFF06201D), fontSize = 8.sp) }
+                for (step in 0 until 16) {
+                    val on = (pattern[pad] ushr step) and 1 == 1
+                    val offColor = when {
+                        playing && step == playhead -> Color(0xFF3A2F55)
+                        step % 4 == 0 -> Color(0xFF2E2447)
+                        else -> C_DARK
+                    }
+                    Box(
+                        modifier = Modifier.weight(1f).height(24.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (on) C_PINK else offColor)
+                            .clickable { onToggleStep(pad, step) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RollView(
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit,
+    loadedPads: Set<Int>,
+    roll: List<List<Int>>,
+    rollLens: List<List<Int>>,
+    noteLen: Int,
+    onNoteLenCycle: () -> Unit,
+    onToggleRollCell: (Int, Int, Int) -> Unit,
+    onAudition: (Int, Int) -> Unit,
+    playhead: Int,
+    playing: Boolean
+) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (pad in 0 until 16) {
+                val bg = when {
+                    pad == selectedPad -> C_CYAN
+                    loadedPads.contains(pad) -> C_PINK.copy(alpha = 0.75f)
+                    else -> C_DARK
+                }
+                Box(
+                    modifier = Modifier.weight(1f).height(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(bg)
+                        .clickable { onSelectPad(pad) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("${pad + 1}", color = Color.White, fontSize = 8.sp)
+                }
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            KBtn("LEN $noteLen", false, onNoteLenCycle, Modifier.width(70.dp).height(34.dp))
+            Text(
+                "Tap key = hear. Tap cell = note. Tap note = delete",
+                color = Color(0xFF9BB7C4), fontSize = 9.sp, maxLines = 1
+            )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            items(25) { r ->
+                val pitchOff = 12 - r
+                val enc = pitchOff + 13
+                val row = roll[selectedPad]
+                val rowLen = rollLens[selectedPad]
+                val cover = IntArray(16) { -1 }
+                for (s0 in 0 until 16) {
+                    if (row[s0] == enc) {
+                        val L = rowLen[s0]
+                        for (s in s0 until minOf(16, s0 + L)) {
+                            if (cover[s] == -1) cover[s] = s0
+                        }
+                    }
+                }
+                val pc = ((pitchOff % 12) + 12) % 12
+                val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier.width(26.dp).height(18.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(if (blackKey) Color(0xFF1A1426) else Color(0xFFE8F6FC))
+                            .clickable { onAudition(selectedPad, pitchOff) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
+                            color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
+                        )
+                    }
+                    for (step in 0 until 16) {
+                        val isNote = cover[step] >= 0
+                        val isStart = cover[step] == step
+                        val bg = when {
+                            isNote -> C_PINK
+                            playing && step == playhead -> Color(0xFF3A2F55)
+                            step % 4 == 0 -> Color(0xFF2E2447)
+                            else -> C_DARK
+                        }
+                        Box(
+                            modifier = Modifier.weight(1f).height(18.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(bg)
+                                .clickable { onToggleRollCell(selectedPad, step, enc) }
+                        ) {
+                            if (isStart) {
+                                Box(
+                                    modifier = Modifier.fillMaxHeight().width(3.dp)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LibView(
+    files: List<String>,
+    onImport: () -> Unit,
+    onPreview: (String) -> Unit,
+    onAssign: (Int, String) -> Unit,
+    loadedPads: Set<Int>,
+    selectedPad: Int,
+    onSelectPad: (Int) -> Unit
+) {
+    var armedFile by remember { mutableStateOf<String?>(null) }
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (pad in 0 until 16) {
+                val bg = when {
+                    armedFile != null -> Color(0xFF3A2F55)
+                    pad == selectedPad -> C_CYAN
+                    loadedPads.contains(pad) -> C_PINK.copy(alpha = 0.75f)
+                    else -> C_DARK
+                }
+                Box(
+                    modifier = Modifier.weight(1f).height(30.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(bg)
+                        .clickable {
+                            val armed = armedFile
+                            if (armed != null) {
+                                onAssign(pad, armed)
+                                armedFile = null
+                            } else {
+                                onSelectPad(pad)
+                            }
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("${pad + 1}", color = Color.White, fontSize = 8.sp)
+                }
+            }
+        }
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            KBtn("IMPORT", false, onImport, Modifier.width(90.dp).height(36.dp))
+            Text(
+                if (armedFile != null) "Holding: $armedFile — tap a pad"
+                else "Tap = play. Hold = pick up, then tap pad",
+                color = if (armedFile != null) C_CYAN else Color(0xFF9BB7C4),
+                fontSize = 9.sp, maxLines = 1
+            )
+        }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            items(files.size) { i ->
+                val name = files[i]
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (armedFile == name) C_PINK else C_DARK)
+                        .pointerInput(name) {
+                            detectTapGestures(
+                                onTap = {
+                                    if (armedFile == name) armedFile = null
+                                    else onPreview(name)
+                                },
+                                onLongPress = { armedFile = name }
+                            )
+                        },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Text(
+                        name,
+                        color = if (armedFile == name) Color.White else Color(0xFFD7E6EE),
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+            }
+        }
+    }
+}
