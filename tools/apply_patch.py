@@ -239,12 +239,8 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """    private external fun nativeSetSongOn(enabled: Boolean)
-    private external fun nativeSetSongLen(len: Int)
-    private external fun nativeSetSongBank(slot: Int, bank: Int)""",
-        """    private external fun nativeSetSongOn(enabled: Boolean)
-    private external fun nativeSetSongLen(len: Int)
-    private external fun nativeSetSongBank(slot: Int, bank: Int)
+        """    private external fun nativeStopCapture(path: String): Boolean""",
+        """    private external fun nativeStopCapture(path: String): Boolean
     private external fun nativeSetPadVol(padIndex: Int, vol: Float)
     private external fun nativeSetPadPan(padIndex: Int, pan: Float)
     private external fun nativeSetMasterVol(vol: Float)
@@ -262,13 +258,13 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """    private var songOn by mutableStateOf(false)""",
-        """    private var songOn by mutableStateOf(false)
-    private var mixAssign by mutableStateOf(List(5) { it })
+        """    private var exportBars by mutableStateOf(2)""",
+        """    private var mixAssign by mutableStateOf(List(5) { it })
     private var volBanks by mutableStateOf(List(16) { 100f })
     private var panBanks by mutableStateOf(List(16) { 50f })
     private var masterVol by mutableStateOf(100f)
-    private var masterPan by mutableStateOf(50f)"""
+    private var masterPan by mutableStateOf(50f)
+    private var exportBars by mutableStateOf(2)"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
@@ -322,8 +318,8 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """            root.put("songon", songOn)""",
-        """            root.put("songon", songOn)
+        """            root.put("banks", banksArr)""",
+        """            root.put("banks", banksArr)
             root.put("vol", JSONArray(volBanks))
             root.put("pan", JSONArray(panBanks))
             root.put("mvol", masterVol)
@@ -331,16 +327,17 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """            songOn = root.optBoolean("songon", false)""",
-        """            songOn = root.optBoolean("songon", false)
-            root.optJSONArray("vol")?.let { va ->
+        """            patternBanks = newPatterns""",
+        """            root.optJSONArray("vol")?.let { va ->
                 volBanks = (0 until 16).map { va.optDouble(it, 100.0).toFloat() }
             }
             root.optJSONArray("pan")?.let { va ->
                 panBanks = (0 until 16).map { va.optDouble(it, 50.0).toFloat() }
             }
             masterVol = root.optDouble("mvol", 100.0).toFloat()
-            masterPan = root.optDouble("mpan", 50.0).toFloat()"""
+            masterPan = root.optDouble("mpan", 50.0).toFloat()
+
+            patternBanks = newPatterns"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
@@ -397,27 +394,21 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """        nativeSetSongOn(songOn)
-        nativeSetSongLen(8)
-        for (i in 0 until 8) {
-            nativeSetSongBank(i, songSlots[i])
-        }
+        """        nativeSetBank(bank)
+    }
 
-        nativeSetBank(bank)""",
-        """        nativeSetSongOn(songOn)
-        nativeSetSongLen(8)
-        for (i in 0 until 8) {
-            nativeSetSongBank(i, songSlots[i])
-        }
-
-        for (p in 0 until 16) {
+    private fun restoreSamples() {""",
+        """        for (p in 0 until 16) {
             nativeSetPadVol(p, volBanks[p] / 100f)
             nativeSetPadPan(p, (panBanks[p] - 50f) / 50f)
         }
         nativeSetMasterVol(masterVol / 100f)
         nativeSetMasterPan((masterPan - 50f) / 50f)
 
-        nativeSetBank(bank)"""
+        nativeSetBank(bank)
+    }
+
+    private fun restoreSamples() {"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
@@ -435,17 +426,8 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """                        onSongSlotCycle = { i ->
-                            val v = (songSlots[i] + 1) % 4
-                            songSlots = songSlots.toMutableList().also { it[i] = v }
-                            nativeSetSongBank(i, v)
-                        },""",
-        """                        onSongSlotCycle = { i ->
-                            val v = (songSlots[i] + 1) % 4
-                            songSlots = songSlots.toMutableList().also { it[i] = v }
-                            nativeSetSongBank(i, v)
-                        },
-                        mixAssign = mixAssign,
+        """                        exportBars = exportBars,""",
+        """                        mixAssign = mixAssign,
                         onMixAssignCycle = { i ->
                             mixAssign = mixAssign.toMutableList().also { it[i] = (it[i] + 1) % 16 }
                         },
@@ -468,19 +450,14 @@ import androidx.compose.foundation.verticalScroll"""
                         onMasterPan = { value ->
                             masterPan = value
                             nativeSetMasterPan((value - 50f) / 50f)
-                        },"""
+                        },
+                        exportBars = exportBars,"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """    songSlots: List<Int>,
-    songOn: Boolean,
-    onSongOnToggle: () -> Unit,
-    onSongSlotCycle: (Int) -> Unit,""",
-        """    songSlots: List<Int>,
-    songOn: Boolean,
-    onSongOnToggle: () -> Unit,
-    onSongSlotCycle: (Int) -> Unit,
-    mixAssign: List<Int>,
+        """    exportBars: Int,
+    onExportBarsCycle: () -> Unit,""",
+        """    mixAssign: List<Int>,
     onMixAssignCycle: (Int) -> Unit,
     volOf: (Int) -> Float,
     panOf: (Int) -> Float,
@@ -489,13 +466,15 @@ import androidx.compose.foundation.verticalScroll"""
     masterVol: Float,
     onMasterVol: (Float) -> Unit,
     masterPan: Float,
-    onMasterPan: (Float) -> Unit,"""
+    onMasterPan: (Float) -> Unit,
+    exportBars: Int,
+    onExportBarsCycle: () -> Unit,"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """            SmallButton("SONG", view == 5) { onViewChange(5) }
+        """            SmallButton("LIB", view == 4) { onViewChange(4) }
         }""",
-        """            SmallButton("SONG", view == 5) { onViewChange(5) }
+        """            SmallButton("LIB", view == 4) { onViewChange(4) }
             SmallButton("MIX", view == 6) { onViewChange(6) }
         }"""
     ),
@@ -678,52 +657,18 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            for (i in 4 until 8) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF152528))
-                        .clickable { onSongSlotCycle(i) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${'A' + songSlots[i]}",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-        }
+        """        Text(
+            text = if (hasSample) "WAV ${index + 1}" else "PAD ${index + 1}",
+            color = Color.Black,
+            style = MaterialTheme.typography.titleMedium
+        )
     }
 }""",
-        """        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            for (i in 4 until 8) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFF152528))
-                        .clickable { onSongSlotCycle(i) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "${'A' + songSlots[i]}",
-                        color = Color.White,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            }
-        }
+        """        Text(
+            text = if (hasSample) "WAV ${index + 1}" else "PAD ${index + 1}",
+            color = Color.Black,
+            style = MaterialTheme.typography.titleMedium
+        )
     }
 }
 
