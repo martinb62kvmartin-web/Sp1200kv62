@@ -120,6 +120,13 @@ Java_com_example_sp1200_MainActivity_nativeSetPadReverse(JNIEnv*, jobject, jint 
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetPadStretch(JNIEnv*, jobject, jint padIndex, jint steps) {
+    if (engine != nullptr) {
+        engine->setPadStretch(padIndex, static_cast<int>(steps));
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSeqSetPlaying(JNIEnv*, jobject, jboolean playing) {
     if (engine != nullptr) {
         engine->setSeqPlaying(playing == JNI_TRUE);

@@ -197,6 +197,14 @@ void AudioEngine::setPadReverse(int padIndex, bool enabled) {
     padRev[b][padIndex].store(enabled, std::memory_order_relaxed);
 }
 
+void AudioEngine::setPadStretch(int padIndex, int steps) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    if (steps < 0) steps = 0;
+    if (steps > 256) steps = 256;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    padStretch[b][padIndex].store(steps, std::memory_order_relaxed);
+}
+
 void AudioEngine::startCapture() {
     std::lock_guard<std::mutex> lock(capMutex);
     capBuf.clear();
@@ -1056,6 +1064,16 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.pitchAddSemi = v.nextPitchAdd.load(std::memory_order_relaxed);
                 v.rate = std::pow(2.0,
                         (padPitch[b][type].load(std::memory_order_relaxed) + v.pitchAddSemi) / 12.0);
+
+                const int stNow = padStretch[b][type].load(std::memory_order_relaxed);
+                if (stNow > 0 && v.sample && !v.sample->data.empty()) {
+                    const double dur = static_cast<double>(v.sample->data.size()) / v.sample->sampleRate;
+                    const double bpmNow = seqBpm.load(std::memory_order_relaxed);
+                    const double target = static_cast<double>(stNow) * (60.0 / bpmNow) / 4.0;
+                    if (target > 0.01 && dur > 0.01) {
+                        v.rate *= dur / target;
+                    }
+                }
                 v.aT = padA[b][type].load(std::memory_order_relaxed);
                 v.dT = padD[b][type].load(std::memory_order_relaxed);
                 v.sL = padS[b][type].load(std::memory_order_relaxed);

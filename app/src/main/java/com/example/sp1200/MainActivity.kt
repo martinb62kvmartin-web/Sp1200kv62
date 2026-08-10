@@ -53,6 +53,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -113,6 +117,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativePreviewFromFd(fd: Int): Boolean
     private external fun nativeClearPad(padIndex: Int)
     private external fun nativeSetPadReverse(padIndex: Int, enabled: Boolean)
+    private external fun nativeSetPadStretch(padIndex: Int, steps: Int)
     private external fun nativeSeqSetPlaying(playing: Boolean)
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
@@ -194,6 +199,7 @@ class MainActivity : ComponentActivity() {
     private var exporting by mutableStateOf(false)
     private var exportWasPlaying = false
     private var reverseBanks by mutableStateOf(List(4) { List(16) { false } })
+    private var stretchBanks by mutableStateOf(List(4) { List(16) { 0 } })
     private var padPeaks by mutableStateOf(List(16) { FloatArray(0) })
 
     private var selectedPad by mutableStateOf(0)
@@ -727,6 +733,12 @@ class MainActivity : ComponentActivity() {
                 }
                 bo.put("rev", revArr)
 
+                val stArr = JSONArray()
+                for (p in 0 until 16) {
+                    stArr.put(stretchBanks[b][p])
+                }
+                bo.put("stretch", stArr)
+
                 val loopsArr = JSONArray()
                 for (p in 0 until 16) {
                     val lo = JSONObject()
@@ -792,6 +804,7 @@ class MainActivity : ComponentActivity() {
             val newRolls = rollBanks.toMutableList()
             val newRollLens = rollLenBanks.toMutableList()
             val newRev = reverseBanks.toMutableList()
+            val newStretch = stretchBanks.toMutableList()
             val newLS = loopStartBanks.toMutableList()
             val newLE = loopEndBanks.toMutableList()
             val newLO = loopOnBanks.toMutableList()
@@ -830,6 +843,14 @@ class MainActivity : ComponentActivity() {
                     newRev[b] = (0 until 16).map { rv.optBoolean(it, false) }
                 }
 
+                bo.optJSONArray("stretch")?.let { sta ->
+                    val rows = stretchBanks[b].toMutableList()
+                    for (p in 0 until minOf(16, sta.length())) {
+                        rows[p] = sta.optInt(p, 0)
+                    }
+                    newStretch[b] = rows
+                }
+
                 bo.optJSONArray("loops")?.let { la ->
                     for (p in 0 until minOf(16, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
@@ -855,6 +876,7 @@ class MainActivity : ComponentActivity() {
             rollBanks = newRolls
             rollLenBanks = newRollLens
             reverseBanks = newRev
+            stretchBanks = newStretch
             loopStartBanks = newLS
             loopEndBanks = newLE
             loopOnBanks = newLO
@@ -893,6 +915,7 @@ class MainActivity : ComponentActivity() {
                 nativeSetLoopPoints(p, loopStartBanks[b][p] / 100f, loopEndBanks[b][p] / 100f)
                 nativeSetLoopOn(p, loopOnBanks[b][p])
                 nativeSetPadReverse(p, reverseBanks[b][p])
+                nativeSetPadStretch(p, stretchBanks[b][p])
                 nativeSetPadParams(
                     p,
                     pitchBanks[b][p],
@@ -1426,17 +1449,25 @@ fun Fader(
 ) {
     val span = range.endInclusive - range.start
     val frac = ((value - range.start) / span).coerceIn(0f, 1f)
+    val cur = rememberUpdatedState(value)
+    val startVal = remember { mutableStateOf(0f) }
+    val acc = remember { mutableStateOf(0f) }
 
     BoxWithConstraints(
         modifier = modifier
             .height(30.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(C_DARK)
-            .pointerInput(value, range.start, range.endInclusive) {
-                detectDragGestures { change, drag ->
+            .pointerInput(range.start, range.endInclusive) {
+                detectDragGestures(
+                    onDragStart = {
+                        startVal.value = cur.value
+                        acc.value = 0f
+                    }
+                ) { change, drag ->
                     change.consume()
-                    val d = drag.x / size.width.toFloat() * span
-                    onValueChange((value + d).coerceIn(range))
+                    acc.value += drag.x / size.width.toFloat() * span
+                    onValueChange((startVal.value + acc.value).coerceIn(range))
                 }
             }
     ) {
@@ -1469,10 +1500,19 @@ fun Knob(
                 .size(62.dp)
                 .clip(CircleShape)
                 .background(Color.White)
-                .pointerInput(value, range.start, range.endInclusive) {
-                    detectDragGestures { change, drag ->
+                .pointerInput(range.start, range.endInclusive) {
+                    val cur2 = rememberUpdatedState(value)
+                    val sv = remember { mutableStateOf(0f) }
+                    val ac = remember { mutableStateOf(0f) }
+                    detectDragGestures(
+                        onDragStart = {
+                            sv.value = cur2.value
+                            ac.value = 0f
+                        }
+                    ) { change, drag ->
                         change.consume()
-                        onValueChange((value - drag.y / 200f * span).coerceIn(range))
+                        ac.value -= drag.y / 200f * span
+                        onValueChange((sv.value + ac.value).coerceIn(range))
                     }
                 },
             contentAlignment = Alignment.Center
@@ -1643,22 +1683,13 @@ fun Sp1200App(
             TabBtn("ROLL", view == 3) { onViewChange(3) }
             TabBtn("MIX", view == 6) { onViewChange(6) }
             TabBtn("LIB", view == 4) { onViewChange(4) }
+            TabBtn("SET", view == 7) { onViewChange(7) }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TabBtn(if (playing) "STOP" else "PLAY", playing) { onPlayToggle() }
             TabBtn(if (gateMode) "GATE" else "SHOT", gateMode) { onGateModeChange(!gateMode) }
             TabBtn(if (crunch) "12BIT" else "CLEAN", crunch) { onCrunchChange(!crunch) }
-            TabBtn(
-                when (midiMode) {
-                    1 -> "MIDI M"
-                    2 -> "MIDI S"
-                    else -> "MIDI"
-                },
-                midiMode != 0
-            ) { onMidiModeChange() }
-            TabBtn("x$exportBars", false) { onExportBarsCycle() }
-            TabBtn(if (exporting) "..." else "EXP", exporting) { onExport() }
             TabBtn(if (recording) "REC*" else "REC", recording) { onRecToggle() }
         }
 
@@ -1720,6 +1751,15 @@ fun Sp1200App(
                 onMuteToggle = onMuteToggle,
                 solos = solos,
                 onSoloToggle = onSoloToggle
+            )
+
+            7 -> SettingsView(
+                midiMode = midiMode,
+                onMidiModeChange = onMidiModeChange,
+                exportBars = exportBars,
+                onExportBarsCycle = onExportBarsCycle,
+                exporting = exporting,
+                onExport = onExport
             )
 
             else -> SampleView(
@@ -1785,8 +1825,11 @@ fun SampleView(
     bpm: Float,
     onBpmChange: (Float) -> Unit,
     swing: Float,
-    onSwingChange: (Float) -> Unit
+    onSwingChange: (Float) -> Unit,
+    stretch: Int,
+    onStretch: (Int) -> Unit
 ) {
+    var showBpm by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1902,15 +1945,52 @@ fun SampleView(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("BPM ${bpm.toInt()}", color = Color.White, fontSize = 10.sp)
+                Text(
+                    "BPM ${bpm.toInt()}  (2x tap)",
+                    color = Color.White, fontSize = 10.sp,
+                    modifier = Modifier.pointerInput(Unit) {
+                        detectTapGestures(onDoubleTap = { showBpm = !showBpm })
+                    }
+                )
                 Fader(bpm, 60f..180f, onBpmChange, Modifier.fillMaxWidth())
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text("SWING ${swing.toInt()}%", color = Color.White, fontSize = 10.sp)
                 Fader(swing, 0f..50f, onSwingChange, Modifier.fillMaxWidth())
+            }
+        }
+
+        if (showBpm) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                var txt by remember { mutableStateOf(bpm.toInt().toString()) }
+                TextField(
+                    value = txt,
+                    onValueChange = { txt = it.filter { ch -> ch.isDigit() } },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(110.dp).height(48.dp)
+                )
+                KBtn("SET", false, {
+                    val v = txt.toFloatOrNull()
+                    if (v != null) onBpmChange(v.coerceIn(60f, 180f))
+                    showBpm = false
+                }, Modifier.width(70.dp).height(40.dp))
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            listOf(0 to "OFF", 16 to "1BAR", 32 to "2BAR", 64 to "4BAR", 4 to "1BEAT", 8 to "2BEAT").forEach { (v, label) ->
+                KBtn(label, stretch == v, { onStretch(v) }, Modifier.weight(1f).height(32.dp))
             }
         }
     }
@@ -2274,5 +2354,36 @@ fun LibView(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun SettingsView(
+    midiMode: Int,
+    onMidiModeChange: () -> Unit,
+    exportBars: Int,
+    onExportBarsCycle: () -> Unit,
+    exporting: Boolean,
+    onExport: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("SETTINGS", color = C_CYAN, fontWeight = FontWeight.Bold)
+        KBtn(
+            when (midiMode) {
+                1 -> "MIDI: MASTER"
+                2 -> "MIDI: SLAVE"
+                else -> "MIDI: OFF"
+            },
+            midiMode != 0,
+            onMidiModeChange,
+            Modifier.fillMaxWidth().height(44.dp)
+        )
+        KBtn("EXPORT LENGTH: x$exportBars", false, onExportBarsCycle, Modifier.fillMaxWidth().height(44.dp))
+        KBtn(if (exporting) "EXPORTING..." else "EXPORT BEAT", exporting, onExport, Modifier.fillMaxWidth().height(44.dp))
     }
 }

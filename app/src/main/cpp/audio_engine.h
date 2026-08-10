@@ -30,6 +30,7 @@ public:
     bool previewFromFd(int fd);
     void clearPad(int padIndex);
     void setPadReverse(int padIndex, bool enabled);
+    void setPadStretch(int padIndex, int steps);
 
     void setBank(int bank);
     void setMute(int padIndex, bool enabled);
@@ -145,6 +146,7 @@ private:
     std::atomic<int> soloCount{0};
 
     std::array<std::array<std::atomic<bool>, kNumPads>, kBanks> padRev{};
+    std::array<std::array<std::atomic<int>, kNumPads>, kBanks> padStretch{};
 
     std::array<std::atomic<float>, kNumPads> padVol{};
     std::array<std::atomic<float>, kNumPads> padPan{};
