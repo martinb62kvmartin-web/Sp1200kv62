@@ -1493,6 +1493,9 @@ fun Knob(
 ) {
     val span = range.endInclusive - range.start
     val frac = ((value - range.start) / span).coerceIn(0f, 1f)
+    val valueNow = rememberUpdatedState(value)
+    val knobStart = remember { mutableStateOf(0f) }
+    val knobAcc = remember { mutableStateOf(0f) }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
@@ -1501,18 +1504,15 @@ fun Knob(
                 .clip(CircleShape)
                 .background(Color.White)
                 .pointerInput(range.start, range.endInclusive) {
-                    val cur2 = rememberUpdatedState(value)
-                    val sv = remember { mutableStateOf(0f) }
-                    val ac = remember { mutableStateOf(0f) }
                     detectDragGestures(
                         onDragStart = {
-                            sv.value = cur2.value
-                            ac.value = 0f
+                            knobStart.value = valueNow.value
+                            knobAcc.value = 0f
                         }
                     ) { change, drag ->
                         change.consume()
-                        ac.value -= drag.y / 200f * span
-                        onValueChange((sv.value + ac.value).coerceIn(range))
+                        knobAcc.value -= drag.y / 200f * span
+                        onValueChange((knobStart.value + knobAcc.value).coerceIn(range))
                     }
                 },
             contentAlignment = Alignment.Center
@@ -1974,7 +1974,6 @@ fun SampleView(
                     value = txt,
                     onValueChange = { txt = it.filter { ch -> ch.isDigit() } },
                     singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(110.dp).height(48.dp)
                 )
                 KBtn("SET", false, {
