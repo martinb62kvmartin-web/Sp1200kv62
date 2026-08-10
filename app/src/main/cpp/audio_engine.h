@@ -28,6 +28,8 @@ public:
     void setCrunch(bool enabled);
     bool loadSample(int padIndex, int fd);
     bool previewFromFd(int fd);
+    void clearPad(int padIndex);
+    void setPadReverse(int padIndex, bool enabled);
 
     void setBank(int bank);
     void setMute(int padIndex, bool enabled);
@@ -51,6 +53,8 @@ public:
     void setPadPan(int padIndex, float pan);
     void setMasterVol(float vol);
     void setMasterPan(float pan);
+
+    std::array<float, 18> getLevels();
 
     void setMidiMode(int mode);
     void midiTick();
@@ -90,6 +94,7 @@ private:
         std::shared_ptr<const Sample> sample;
         std::shared_ptr<const Sample> nextSample;
         double pos = 0.0;
+        bool reverse = false;
 
         int padIndex = 0;
         int bank = 0;
@@ -139,10 +144,16 @@ private:
     std::array<std::atomic<bool>, kNumPads> solos{};
     std::atomic<int> soloCount{0};
 
+    std::array<std::array<std::atomic<bool>, kNumPads>, kBanks> padRev{};
+
     std::array<std::atomic<float>, kNumPads> padVol{};
     std::array<std::atomic<float>, kNumPads> padPan{};
     std::atomic<float> masterVol{1.0f};
     std::atomic<float> masterPan{0.0f};
+
+    std::array<std::atomic<float>, kNumPads> padLevel{};
+    std::atomic<float> levelL{0.0f};
+    std::atomic<float> levelR{0.0f};
 
     std::atomic<bool> seqPlaying{false};
     std::atomic<bool> seqRestart{false};
