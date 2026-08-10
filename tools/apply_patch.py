@@ -6,12 +6,23 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-a("pollTick = pollTick,", """pollTick = pollTick,
+a("""                        pollTick = pollTick,
                         stretch = stretchBanks[bank][selectedPad],
                         onStretch = { v ->
                             stretchBanks = stretchBanks.set2(bank, selectedPad, v)
                             nativeSetPadStretch(selectedPad, v)
-                        },""")
+                        },""", """                        pollTick = pollTick,""")
+
+a("""                swing = swing,
+                onSwingChange = onSwingChange
+            )""", """                swing = swing,
+                onSwingChange = onSwingChange,
+                stretch = stretchBanks[bank][selectedPad],
+                onStretch = { v ->
+                    stretchBanks = stretchBanks.set2(bank, selectedPad, v)
+                    nativeSetPadStretch(selectedPad, v)
+                }
+            )""")
 
 def main():
     for path, old, new in P:
