@@ -507,29 +507,26 @@ import androidx.compose.foundation.verticalScroll"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
-        """    Column(
+        """    playhead: Int,
+    playing: Boolean
+) {
+    Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        for (pad in 0 until 8) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(24.dp)
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF152528))""",
-        """    Column(
+    ) {""",
+        """    playhead: Int,
+    playing: Boolean
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        for (pad in 0 until 16) {
+    ) {"""
+    ),
+    (
+        "app/src/main/java/com/example/sp1200/MainActivity.kt",
+        """        for (pad in 0 until 8) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -538,9 +535,17 @@ import androidx.compose.foundation.verticalScroll"""
                 Box(
                     modifier = Modifier
                         .width(24.dp)
-                        .height(26.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(if (mutes[pad]) Color(0xFFB71C1C) else Color(0xFF152528))"""
+                        .height(26.dp)""",
+        """        for (pad in 0 until 16) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(24.dp)
+                        .height(26.dp)"""
     ),
     (
         "app/src/main/java/com/example/sp1200/MainActivity.kt",
