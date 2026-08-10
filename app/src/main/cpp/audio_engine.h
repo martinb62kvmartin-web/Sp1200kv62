@@ -47,6 +47,11 @@ public:
     void setPadParams(int padIndex, double pitchSemi, double attack,
                       double decay, double sustain, double release);
 
+    void setPadVol(int padIndex, float vol);
+    void setPadPan(int padIndex, float pan);
+    void setMasterVol(float vol);
+    void setMasterPan(float pan);
+
     void setMidiMode(int mode);
     void midiTick();
     void midiStart();
@@ -70,7 +75,7 @@ public:
     ) override;
 
 private:
-    static constexpr int kNumPads = 8;
+    static constexpr int kNumPads = 16;
     static constexpr int kSteps = 16;
     static constexpr int kBanks = 4;
 
@@ -134,6 +139,11 @@ private:
     std::array<std::atomic<bool>, kNumPads> solos{};
     std::atomic<int> soloCount{0};
 
+    std::array<std::atomic<float>, kNumPads> padVol{};
+    std::array<std::atomic<float>, kNumPads> padPan{};
+    std::atomic<float> masterVol{1.0f};
+    std::atomic<float> masterPan{0.0f};
+
     std::atomic<bool> seqPlaying{false};
     std::atomic<bool> seqRestart{false};
     std::atomic<double> seqBpm{90.0};
@@ -168,7 +178,8 @@ private:
     int recPad = 0;
     int recBank = 0;
 
-    float lpState = 0.0f;
+    float lpStateL = 0.0f;
+    float lpStateR = 0.0f;
 
     std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopStartFrac{};
     std::array<std::array<std::atomic<double>, kNumPads>, kBanks> loopEndFrac{};
