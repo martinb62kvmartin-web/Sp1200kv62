@@ -6,10 +6,7 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-a("import androidx.compose.ui.text.input.KeyboardType\n", "")
-a("import androidx.compose.ui.text.input.KeyboardOptions\n", "")
-a("keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),\n", "")
-a("onSwingChange = onSwingChange,", """onSwingChange = onSwingChange,
+a("pollTick = pollTick,", """pollTick = pollTick,
                         stretch = stretchBanks[bank][selectedPad],
                         onStretch = { v ->
                             stretchBanks = stretchBanks.set2(bank, selectedPad, v)
