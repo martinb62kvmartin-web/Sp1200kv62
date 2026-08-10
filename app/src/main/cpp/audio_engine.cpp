@@ -1090,7 +1090,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     if (capturing.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> lock(capMutex);
         if (capBuf.size() < static_cast<size_t>(sampleRate) * 120) {
-            capBuf.insert(capBuf.end(), output, output + numFrames);
+            capBuf.insert(capBuf.end(), output, output + numFrames * 2);
         }
     }
 
