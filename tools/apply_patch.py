@@ -12,6 +12,7 @@ def c(old, new):
 def j(old, new):
     P.append(("app/src/main/cpp/native-lib.cpp", old, new))
 
+# ---------- 16 pads / stereo / mixer (engine) ----------
 h("    static constexpr int kNumPads = 8;", "    static constexpr int kNumPads = 16;")
 h("""    void setPadParams(int padIndex, double pitchSemi, double attack,
                       double decay, double sustain, double release);
@@ -63,37 +64,11 @@ void AudioEngine::setMasterPan(float pan) {
 }
 
 void AudioEngine::setGateMode(bool enabled) {""")
-c("""bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate) {
-    FILE* f = std::fopen(path.c_str(), "wb");
-    if (f == nullptr) {
-        return false;
-    }
-
-    const uint32_t n = static_cast<uint32_t>(data.size());
-    const uint32_t dataSize = n * 2;
-    const uint32_t chunkSize = 36 + dataSize;
-    const uint16_t one = 1;
-    const uint16_t ch = 1;
-    const uint16_t bps = 16;
-    const uint32_t fmtSize = 16;
-    const uint32_t byteRate = rate * 2;
-    const uint16_t blockAlign = 2;
-""", """bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate, int channels) {
-    FILE* f = std::fopen(path.c_str(), "wb");
-    if (f == nullptr) {
-        return false;
-    }
-
-    const uint16_t ch = static_cast<uint16_t>(channels > 0 ? channels : 1);
-    const uint32_t n = static_cast<uint32_t>(data.size());
-    const uint32_t dataSize = n * 2;
-    const uint32_t chunkSize = 36 + dataSize;
-    const uint16_t one = 1;
-    const uint16_t bps = 16;
-    const uint32_t fmtSize = 16;
-    const uint32_t byteRate = rate * ch;
-    const uint16_t blockAlign = static_cast<uint16_t>(2 * ch);
-""")
+c("""bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate) {""", """bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate, int channels) {""")
+c("""    const uint16_t ch = 1;""", """    const uint16_t ch = static_cast<uint16_t>(channels > 0 ? channels : 1);""")
+c("""    const uint32_t byteRate = rate * 2;
+    const uint16_t blockAlign = 2;""", """    const uint32_t byteRate = rate * ch;
+    const uint16_t blockAlign = static_cast<uint16_t>(2 * ch);""")
 c("""        writeWavFile(path, sample->data, static_cast<uint32_t>(rate));""", """        writeWavFile(path, sample->data, static_cast<uint32_t>(rate), 1);""")
 c("""        writeWavFile(path, dst->data, static_cast<uint32_t>(dst->sampleRate));""", """        writeWavFile(path, dst->data, static_cast<uint32_t>(dst->sampleRate), 1);""")
 c("""    const bool ok = writeWavFile(path, data, static_cast<uint32_t>(sampleRate));""", """    const bool ok = writeWavFile(path, data, static_cast<uint32_t>(sampleRate), 2);""")
@@ -183,6 +158,8 @@ Java_com_example_sp1200_MainActivity_nativeSetMasterPan(JNIEnv*, jobject, jfloat
 
 JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetMidiMode(JNIEnv*, jobject, jint mode) {""")
+
+# ---------- 16 pads / mixer (kotlin) ----------
 a("""import androidx.compose.foundation.lazy.LazyColumn""", """import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll""")
@@ -299,10 +276,8 @@ a("""    exportBars: Int,
     onMasterPan: (Float) -> Unit,
     exportBars: Int,
     onExportBarsCycle: () -> Unit,""")
-a("""            SmallButton("LIB", view == 4) { onViewChange(4) }
-        }""", """            SmallButton("LIB", view == 4) { onViewChange(4) }
-            SmallButton("MIX", view == 6) { onViewChange(6) }
-        }""")
+a("""            SmallButton("LIB", view == 4) { onViewChange(4) }""", """            SmallButton("LIB", view == 4) { onViewChange(4) }
+            SmallButton("MIX", view == 6) { onViewChange(6) }""")
 a("""            else -> {
                 Text(
                     text = "Hold = play. Load samples in LIB. Bank: ${'A' + bank}",""", """            6 -> MixView(
@@ -373,57 +348,13 @@ a("""            for (pad in 0 until 8) {
                     pad == selectedPad -> Color.White""")
 a("""    padReleaseMs: Float,
     onPadReleaseMs: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {""", """    padReleaseMs: Float,
+) {""", """    padReleaseMs: Float,
     onPadReleaseMs: (Float) -> Unit,
     padVol: Float,
     onPadVol: (Float) -> Unit,
     padPan: Float,
     onPadPan: (Float) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {""")
-a("""            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "RELEASE ${padReleaseMs.toInt()} ms",""", """            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "VOL ${padVol.toInt()}%",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padVol,
-                    onValueChange = onPadVol,
-                    valueRange = 0f..150f
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "PAN ${padPan.toInt()}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Slider(
-                    value = padPan,
-                    onValueChange = onPadPan,
-                    valueRange = 0f..100f
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "RELEASE ${padReleaseMs.toInt()} ms",""")
+) {""")
 a("""                    releaseBanks = releaseBanks.set2(bank, selectedPad, value)
                     pushPadParams(selectedPad)
                 }""", """                    releaseBanks = releaseBanks.set2(bank, selectedPad, value)
@@ -528,6 +459,81 @@ fun MixView(
     }
 }""")
 
+# ---------- тема (бирюза) ----------
+a("color = Color(0xFF141428)", "color = Color(0xFF0C1416)")
+a("""        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) Color(0xFFE91E5A) else Color(0xFF262636)
+        ),""", """        colors = ButtonDefaults.buttonColors(
+            containerColor = if (active) Color(0xFF2DD4BF) else Color(0xFF152528)
+        ),""")
+a("""        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 10.sp,
+            maxLines = 1
+        )""", """        Text(
+            text = label,
+            color = if (active) Color(0xFF06201D) else Color(0xFFBFE6E2),
+            fontSize = 10.sp,
+            maxLines = 1
+        )""")
+a("""            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF4FC3F7)""", """            style = MaterialTheme.typography.titleLarge,
+            color = Color(0xFF2DD4BF)""")
+a("""fun padColor(index: Int): Color = when (index) {
+    0 -> Color(0xFFE53935)
+    1 -> Color(0xFFFB8C00)
+    2 -> Color(0xFFFDD835)
+    3 -> Color(0xFF43A047)
+    4 -> Color(0xFF1E88E5)
+    5 -> Color(0xFF8E24AA)
+    6 -> Color(0xFF00ACC1)
+    else -> Color(0xFF546E7A)
+}""", """fun padColor(index: Int): Color = when (index) {
+    0 -> Color(0xFF2DD4BF)
+    1 -> Color(0xFF4CC3E0)
+    2 -> Color(0xFF7FA8F0)
+    3 -> Color(0xFFA78BFA)
+    4 -> Color(0xFFE07FA0)
+    5 -> Color(0xFFF0A45C)
+    6 -> Color(0xFFB8E05C)
+    7 -> Color(0xFF5EEAD4)
+    8 -> Color(0xFF38BDF8)
+    9 -> Color(0xFF818CF8)
+    10 -> Color(0xFFC084FC)
+    11 -> Color(0xFFF472B6)
+    12 -> Color(0xFFFBBF24)
+    13 -> Color(0xFFA3E635)
+    14 -> Color(0xFF34D399)
+    else -> Color(0xFF22D3EE)
+}""")
+a("Color(0xFFE91E5A)", "Color(0xFF2DD4BF)")
+a("Color(0xFFE91E5A)", "Color(0xFF2DD4BF)")
+a("Color(0xFFE91E5A)", "Color(0xFF2DD4BF)")
+a("Color(0xFF262636)", "Color(0xFF152528)")
+a("Color(0xFF262636)", "Color(0xFF152528)")
+a("Color(0xFF262636)", "Color(0xFF152528)")
+a("Color(0xFF262636)", "Color(0xFF152528)")
+a("Color(0xFF2A2A2A)", "Color(0xFF101C1F)")
+a("Color(0xFF2A2A2A)", "Color(0xFF101C1F)")
+a("Color(0xFF2A2A2A)", "Color(0xFF101C1F)")
+a("Color(0xFF3A3A3A)", "Color(0xFF1B3236)")
+a("Color(0xFF3A3A3A)", "Color(0xFF1B3236)")
+a("Color(0xFF262626)", "Color(0xFF0F1B1E)")
+a("Color(0xFF262626)", "Color(0xFF0F1B1E)")
+a("Color(0xFF5A5A7A)", "Color(0xFF27464B)")
+a("Color(0xFF5A5A7A)", "Color(0xFF27464B)")
+a("Color(0xFF333333)", "Color(0xFF152528)")
+a("Color(0xFF333333)", "Color(0xFF152528)")
+a(".background(Color(0xFF1E1E1E))", ".background(Color(0xFF0F1B1E))")
+a(".background(Color(0xFF4FC3F7))", ".background(Color(0xFF2DD4BF))")
+a("""                        color = Color(0xFF4FC3F7),
+                        start = Offset""", """                        color = Color(0xFF2DD4BF),
+                        start = Offset""")
+a("Color(0xFF1A1A2E)", "Color(0xFF0A1214)")
+a("Color(0xFFDDDDEE)", "Color(0xFFBFE6E2)")
+a("Color(0xFF3A3A5A)", "Color(0xFF1B3236)")
+
 def main():
     for path, old, new in P:
         if not os.path.exists(path):
@@ -538,7 +544,7 @@ def main():
             text = f.read()
 
         if old not in text:
-            print("Skipped (not found or already applied):", old[:60].replace("\n", " "))
+            print("Skipped:", old[:60].replace("\n", " "))
             continue
 
         text = text.replace(old, new, 1)
