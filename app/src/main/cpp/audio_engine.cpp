@@ -87,6 +87,7 @@ AudioEngine::AudioEngine() {
     for (auto& row : loopStartFrac) for (auto& f : row) f.store(0.0);
     for (auto& row : loopEndFrac) for (auto& f : row) f.store(1.0);
     for (auto& row : loopOn) for (auto& f : row) f.store(false);
+    for (auto& row : padRev) for (auto& f : row) f.store(false);
     for (auto& row : padPitch) for (auto& f : row) f.store(0.0);
     for (auto& row : padA) for (auto& f : row) f.store(0.0);
     for (auto& row : padD) for (auto& f : row) f.store(0.0);
@@ -96,6 +97,7 @@ AudioEngine::AudioEngine() {
     for (auto& s : solos) s.store(false);
     for (auto& v : padVol) v.store(1.0f);
     for (auto& p : padPan) p.store(0.0f);
+    for (auto& l : padLevel) l.store(0.0f);
     for (auto& h : padHits) h.store(0);
     for (auto& e : rollEndAt) e = -1;
 }
@@ -170,6 +172,29 @@ void AudioEngine::stop() {
         outputStream.reset();
         LOGI("Audio engine stopped");
     }
+}
+
+std::array<float, 18> AudioEngine::getLevels() {
+    std::array<float, 18> out{};
+    for (int i = 0; i < kNumPads; ++i) {
+        out[static_cast<size_t>(i)] = padLevel[i].load(std::memory_order_relaxed);
+    }
+    out[16] = levelL.load(std::memory_order_relaxed);
+    out[17] = levelR.load(std::memory_order_relaxed);
+    return out;
+}
+
+void AudioEngine::clearPad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    samples[b][padIndex].reset();
+}
+
+void AudioEngine::setPadReverse(int padIndex, bool enabled) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    padRev[b][padIndex].store(enabled, std::memory_order_relaxed);
 }
 
 void AudioEngine::startCapture() {
@@ -790,6 +815,32 @@ double AudioEngine::renderVoice(Voice& v) {
     if (v.sample && !v.sample->data.empty()) {
         const std::vector<float>& d = v.sample->data;
         const double step = (v.sample->sampleRate / sampleRate) * rate;
+
+        if (v.reverse) {
+            if (v.pos < 0.0) {
+                v.amp = 0.0;
+                return 0.0;
+            }
+            const size_t i = static_cast<size_t>(v.pos);
+            if (i >= d.size()) {
+                v.amp = 0.0;
+                return 0.0;
+            }
+            double out;
+            if (crunch) {
+                out = d[i];
+            } else {
+                const size_t i1 = (i + 1 < d.size()) ? i + 1 : i;
+                const double frac = v.pos - static_cast<double>(i);
+                out = d[i] + (d[i1] - d[i]) * frac;
+            }
+            v.pos -= step;
+            if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos <= v.loopStart) {
+                v.pos = v.loopEnd - 1.0;
+            }
+            return out * v.amp;
+        }
+
         const size_t i = static_cast<size_t>(v.pos);
 
         if (i + 1 >= d.size()) {
@@ -920,6 +971,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
     const double dt = 1.0 / sampleRate;
 
+    float pk[16] = {0};
+    float ml = 0.0f;
+    float mr = 0.0f;
+
     for (int32_t frame = 0; frame < numFrames; ++frame) {
         const double absolute = totalFrames + static_cast<double>(frame);
 
@@ -997,7 +1052,6 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.phase2 = 0.0;
                 v.prevNoise = 0.0;
                 v.amp = 1.0;
-                v.pos = 0.0;
                 v.rng = 123456789u + static_cast<uint32_t>(type) * 999983u;
 
                 v.pitchAddSemi = v.nextPitchAdd.load(std::memory_order_relaxed);
@@ -1008,19 +1062,24 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.sL = padS[b][type].load(std::memory_order_relaxed);
                 v.rT = padR[b][type].load(std::memory_order_relaxed);
 
-                v.envLevel = (v.aT <= 0.001) ? 1.0 : 0.0;
-                v.envStage = (v.aT <= 0.001) ? 1 : 0;
-                v.relStart = 0.0;
-                v.relTime = 0.0;
-
                 if (v.sample && !v.sample->data.empty()) {
+                    v.reverse = padRev[b][type].load(std::memory_order_relaxed);
+                    v.pos = v.reverse ? static_cast<double>(v.sample->data.size() - 2) : 0.0;
+                    if (v.pos < 0.0) v.pos = 0.0;
                     v.loopEnabled = loopOn[b][type].load(std::memory_order_relaxed);
                     const double sz = static_cast<double>(v.sample->data.size());
                     v.loopStart = loopStartFrac[b][type].load(std::memory_order_relaxed) * sz;
                     v.loopEnd = loopEndFrac[b][type].load(std::memory_order_relaxed) * sz;
                 } else {
+                    v.reverse = false;
+                    v.pos = 0.0;
                     v.loopEnabled = false;
                 }
+
+                v.envLevel = (v.aT <= 0.001) ? 1.0 : 0.0;
+                v.envStage = (v.aT <= 0.001) ? 1 : 0;
+                v.relStart = 0.0;
+                v.relTime = 0.0;
 
                 v.playingSample.store(v.sample && !v.sample->data.empty(),
                         std::memory_order_relaxed);
@@ -1096,6 +1155,9 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 const float m = static_cast<float>(renderVoice(v) * v.envLevel);
                 mixL += m * gl;
                 mixR += m * gr;
+
+                const float am = m < 0 ? -m : m;
+                if (pIdx >= 0 && pIdx < 16 && am > pk[pIdx]) pk[pIdx] = am;
             }
 
             if (!v.sample || v.sample->data.empty()) {
@@ -1120,7 +1182,21 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
         output[frame * 2] = L * 0.8f;
         output[frame * 2 + 1] = R * 0.8f;
+
+        const float al = L < 0 ? -L : L;
+        const float ar = R < 0 ? -R : R;
+        if (al > ml) ml = al;
+        if (ar > mr) mr = ar;
     }
+
+    for (int i = 0; i < 16; ++i) {
+        const float old = padLevel[i].load(std::memory_order_relaxed) * 0.8f;
+        padLevel[i].store(pk[i] > old ? pk[i] : old, std::memory_order_relaxed);
+    }
+    const float oldL = levelL.load(std::memory_order_relaxed) * 0.8f;
+    levelL.store(ml > oldL ? ml : oldL, std::memory_order_relaxed);
+    const float oldR = levelR.load(std::memory_order_relaxed) * 0.8f;
+    levelR.store(mr > oldR ? mr : oldR, std::memory_order_relaxed);
 
     if (capturing.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> lock(capMutex);
