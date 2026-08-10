@@ -42,21 +42,21 @@ float vintage(float x) {
     return ulawDecode(e);
 }
 
-bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate) {
+bool writeWavFile(const std::string& path, const std::vector<float>& data, uint32_t rate, int channels) {
     FILE* f = std::fopen(path.c_str(), "wb");
     if (f == nullptr) {
         return false;
     }
 
+    const uint16_t ch = static_cast<uint16_t>(channels > 0 ? channels : 1);
     const uint32_t n = static_cast<uint32_t>(data.size());
     const uint32_t dataSize = n * 2;
     const uint32_t chunkSize = 36 + dataSize;
     const uint16_t one = 1;
-    const uint16_t ch = 1;
     const uint16_t bps = 16;
     const uint32_t fmtSize = 16;
-    const uint32_t byteRate = rate * 2;
-    const uint16_t blockAlign = 2;
+    const uint32_t byteRate = rate * ch;
+    const uint16_t blockAlign = static_cast<uint16_t>(2 * ch);
 
     std::fwrite("RIFF", 1, 4, f);
     std::fwrite(&chunkSize, 4, 1, f);
@@ -94,6 +94,8 @@ AudioEngine::AudioEngine() {
     for (auto& row : padR) for (auto& f : row) f.store(0.05);
     for (auto& m : mutes) m.store(false);
     for (auto& s : solos) s.store(false);
+    for (auto& v : padVol) v.store(1.0f);
+    for (auto& p : padPan) p.store(0.0f);
     for (auto& h : padHits) h.store(0);
     for (auto& e : rollEndAt) e = -1;
 }
@@ -112,7 +114,7 @@ bool AudioEngine::start() {
     builder.setDirection(oboe::Direction::Output);
     builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
     builder.setFormat(oboe::AudioFormat::Float);
-    builder.setChannelCount(1);
+    builder.setChannelCount(2);
     builder.setDataCallback(this);
 
     oboe::Result result = builder.openStream(outputStream);
@@ -189,7 +191,7 @@ bool AudioEngine::stopCapture(const std::string& path) {
         return false;
     }
 
-    const bool ok = writeWavFile(path, data, static_cast<uint32_t>(sampleRate));
+    const bool ok = writeWavFile(path, data, static_cast<uint32_t>(sampleRate), 2);
     LOGI("Export written: %s (%zu frames)", path.c_str(), data.size());
     return ok;
 }
@@ -204,6 +206,24 @@ void AudioEngine::setPitchSemitones(double semitones) {
 
 void AudioEngine::setCrunch(bool enabled) {
     crunchOn.store(enabled, std::memory_order_relaxed);
+}
+
+void AudioEngine::setPadVol(int padIndex, float vol) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    padVol[padIndex].store(clampd(vol, 0.0f, 1.5f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setPadPan(int padIndex, float pan) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    padPan[padIndex].store(clampd(pan, -1.0f, 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setMasterVol(float vol) {
+    masterVol.store(clampd(vol, 0.0f, 1.5f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setMasterPan(float pan) {
+    masterPan.store(clampd(pan, -1.0f, 1.0f), std::memory_order_relaxed);
 }
 
 void AudioEngine::setMidiMode(int mode) {
@@ -325,7 +345,7 @@ bool AudioEngine::stopRecording() {
 
     if (!dataDir.empty()) {
         const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(p) + ".wav";
-        writeWavFile(path, sample->data, static_cast<uint32_t>(rate));
+        writeWavFile(path, sample->data, static_cast<uint32_t>(rate), 1);
     }
 
     LOGI("Recording stored on bank %d pad %d", b, p);
@@ -493,7 +513,7 @@ bool AudioEngine::trimToLoop(int padIndex) {
 
     if (!dataDir.empty()) {
         const std::string path = dataDir + "/b" + std::to_string(b) + "_p" + std::to_string(padIndex) + ".wav";
-        writeWavFile(path, dst->data, static_cast<uint32_t>(dst->sampleRate));
+        writeWavFile(path, dst->data, static_cast<uint32_t>(dst->sampleRate), 1);
     }
 
     LOGI("Trimmed bank %d pad %d to %zu frames", b, padIndex, dst->data.size());
@@ -955,7 +975,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             }
         }
 
-        float mix = 0.0f;
+        float mixL = 0.0f;
+        float mixR = 0.0f;
 
         for (auto& v : voices) {
             if (!v.active.load(std::memory_order_relaxed)) {
@@ -1066,30 +1087,44 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 continue;
             }
 
-            mix += static_cast<float>(renderVoice(v) * v.envLevel);
+            {
+                const int pIdx = v.padIndex;
+                const float vol = padVol[pIdx].load(std::memory_order_relaxed);
+                const float pan = padPan[pIdx].load(std::memory_order_relaxed);
+                const float gl = vol * (pan < 0.0f ? 1.0f : 1.0f - pan);
+                const float gr = vol * (pan > 0.0f ? 1.0f : 1.0f + pan);
+                const float m = static_cast<float>(renderVoice(v) * v.envLevel);
+                mixL += m * gl;
+                mixR += m * gr;
+            }
 
             if (!v.sample || v.sample->data.empty()) {
                 v.amp *= v.decay;
             }
         }
 
-        if (mix > 1.0f) {
-            mix = 1.0f;
-        } else if (mix < -1.0f) {
-            mix = -1.0f;
-        }
+        const float mv = masterVol.load(std::memory_order_relaxed);
+        const float mp = masterPan.load(std::memory_order_relaxed);
+        float L = mixL * mv * (mp < 0.0f ? 1.0f : 1.0f - mp);
+        float R = mixR * mv * (mp > 0.0f ? 1.0f : 1.0f + mp);
+
+        if (L > 1.0f) L = 1.0f; else if (L < -1.0f) L = -1.0f;
+        if (R > 1.0f) R = 1.0f; else if (R < -1.0f) R = -1.0f;
 
         if (crunch) {
-            lpState += 0.35f * (mix - lpState);
-            mix = vintage(lpState);
+            lpStateL += 0.35f * (L - lpStateL);
+            L = vintage(lpStateL);
+            lpStateR += 0.35f * (R - lpStateR);
+            R = vintage(lpStateR);
         }
 
-        output[frame] = mix * 0.8f;
+        output[frame * 2] = L * 0.8f;
+        output[frame * 2 + 1] = R * 0.8f;
     }
 
     if (capturing.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> lock(capMutex);
-        if (capBuf.size() < static_cast<size_t>(sampleRate) * 120) {
+        if (capBuf.size() < static_cast<size_t>(sampleRate) * 240) {
             capBuf.insert(capBuf.end(), output, output + numFrames * 2);
         }
     }
