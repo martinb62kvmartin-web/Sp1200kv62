@@ -1338,6 +1338,11 @@ class MainActivity : ComponentActivity() {
                             nativeSetPadPan(selectedPad, (value - 50f) / 50f)
                         },
                         pollTick = pollTick,
+                        stretch = stretchBanks[bank][selectedPad],
+                        onStretch = { v ->
+                            stretchBanks = stretchBanks.set2(bank, selectedPad, v)
+                            nativeSetPadStretch(selectedPad, v)
+                        },
                         crunch = crunch,
                         onCrunchChange = { enabled ->
                             crunch = enabled
@@ -1667,7 +1672,9 @@ fun Sp1200App(
     onPadPan: (Float) -> Unit,
     pollTick: Int,
     crunch: Boolean,
-    onCrunchChange: (Boolean) -> Unit
+    onCrunchChange: (Boolean) -> Unit,
+    stretch: Int,
+    onStretch: (Int) -> Unit
 ) {
     Column(
         modifier = Modifier
