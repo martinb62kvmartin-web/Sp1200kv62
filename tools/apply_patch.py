@@ -8,7 +8,7 @@ def a(old, new):
 
 a("""        LazyVerticalGrid(
             columns = GridCells.Fixed(4),
-            modifier = Modifier.height(520.dp),
+            modifier = Modifier.height(560.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -20,43 +20,6 @@ a("""        LazyVerticalGrid(
                 ) {
                     for (col in 0 until 4) {
                         val index = row * 4 + col""")
-
-a("""                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))""", """                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))""")
-
-a("""                                },
-                                onLongPress = { onPadLongPress(index) }""", """                                }""")
-
-a("""                    Text(
-                        text = "${index + 1}",
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(4.dp)
-                    )
-                }
-            }
-        }""", """                    Text(
-                        text = "${index + 1}",
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .padding(4.dp)
-                    )
-                }
-                    }
-                }
-            }
-        }""")
 
 def main():
     for path, old, new in P:
