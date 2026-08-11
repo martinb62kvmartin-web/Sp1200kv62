@@ -81,6 +81,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.geometry.CornerRadius
 import android.graphics.BitmapFactory
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -2888,6 +2889,9 @@ fun WaveEditor(
         val vsRef = rememberUpdatedState(viewStart)
         val zoomRef = rememberUpdatedState(zoom)
         val lineColor = C_CYAN
+        val regionColor = C_PINK
+        val lsRef = rememberUpdatedState(loopStart)
+        val leRef = rememberUpdatedState(loopEnd)
 
         Canvas(
             modifier = Modifier
@@ -2899,10 +2903,19 @@ fun WaveEditor(
                         val z = (oldZ * zoomChange).coerceIn(1f, 64f)
                         val oldVw = 1f / oldZ
                         val newVw = 1f / z
-                        val anchor = vsRef.value + (centroid.x / w) * oldVw
-                        val ns = anchor - (centroid.x / w) * newVw - (pan.x / w) * newVw
-                        zoom = z
-                        center = (ns + newVw / 2f).coerceIn(newVw / 2f, 1f - newVw / 2f)
+                        val cx = centroid.x / w
+                        val lsX = (lsRef.value / 100f - vsRef.value) / oldVw
+                        val leX = (leRef.value / 100f - vsRef.value) / oldVw
+                        if (zoomChange == 1f && cx >= lsX && cx <= leX) {
+                            val d = pan.x / w * oldVw * 100f
+                            onLoopStart(lsRef.value + d)
+                            onLoopEnd(leRef.value + d)
+                        } else {
+                            val anchor = vsRef.value + cx * oldVw
+                            val ns = anchor - cx * newVw - (pan.x / w) * newVw
+                            zoom = z
+                            center = (ns + newVw / 2f).coerceIn(newVw / 2f, 1f - newVw / 2f)
+                        }
                     }
                 }
         ) {
@@ -2912,10 +2925,16 @@ fun WaveEditor(
             if (n > 0) {
                 val ls = ((loopStart / 100f - viewStart) / viewW).coerceIn(0f, 1f) * width
                 val le = ((loopEnd / 100f - viewStart) / viewW).coerceIn(0f, 1f) * width
-                drawRect(
-                    color = Color(0x33FFFFFF),
+                drawRoundRect(
+                    color = regionColor.copy(alpha = 0.35f),
                     topLeft = Offset(ls, 0f),
-                    size = Size(le - ls, h)
+                    size = Size(le - ls, h),
+                    cornerRadius = CornerRadius(10f)
+                )
+                drawRect(
+                    color = regionColor,
+                    topLeft = Offset(ls, 0f),
+                    size = Size(le - ls, 6f)
                 )
                 drawLine(Color(0x55FFFFFF), Offset(0f, h / 2), Offset(width, h / 2), 1f)
                 val off = if (shake != 0) ((shake % 3) - 1) * h * 0.04f else 0f
