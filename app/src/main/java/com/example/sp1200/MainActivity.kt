@@ -1908,7 +1908,7 @@ fun SampleView(
                 val flash = flashes[index]
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .weight(1f)
                         .aspectRatio(1f)
                         .clip(RoundedCornerShape(12.dp))
                         .background(
@@ -1922,8 +1922,7 @@ fun SampleView(
                                     onPadDown(index)
                                     tryAwaitRelease()
                                     onPadUp(index)
-                                },
-                                onLongPress = { onPadLongPress(index) }
+                                }
                             )
                         }
                 ) {
@@ -1946,6 +1945,8 @@ fun SampleView(
                             .align(Alignment.TopStart)
                             .padding(4.dp)
                     )
+                }
+                    }
                 }
             }
         }
