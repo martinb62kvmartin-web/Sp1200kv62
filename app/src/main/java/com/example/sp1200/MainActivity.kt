@@ -2887,6 +2887,7 @@ fun WaveEditor(
         val w = constraints.maxWidth.toFloat()
         val vsRef = rememberUpdatedState(viewStart)
         val zoomRef = rememberUpdatedState(zoom)
+        val lineColor = C_CYAN
 
         Canvas(
             modifier = Modifier
@@ -2937,7 +2938,7 @@ fun WaveEditor(
                     }
                     val x = (bIdx + 0.5f) * width / bars
                     val p = m.coerceIn(0f, 1f) * (h / 2f) * 0.95f
-                    drawLine(C_CYAN, Offset(x, h / 2 - p + off), Offset(x, h / 2 + p + off), width / bars)
+                    drawLine(lineColor, Offset(x, h / 2 - p + off), Offset(x, h / 2 + p + off), width / bars)
                 }
             }
         }
