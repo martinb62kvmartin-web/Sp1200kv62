@@ -98,6 +98,7 @@ AudioEngine::AudioEngine() {
     for (auto& v : padVol) v.store(1.0f);
     for (auto& p : padPan) p.store(0.0f);
     for (auto& l : padLevel) l.store(0.0f);
+    for (auto& row : rollVel) for (auto& r : row) for (auto& v : r) v.store(100);
     for (auto& h : padHits) h.store(0);
     for (auto& e : rollEndAt) e = -1;
 }
@@ -869,7 +870,16 @@ bool AudioEngine::loadSample(int padIndex, int fd) {
     return true;
 }
 
-void AudioEngine::triggerVoice(int padIndex, double semiAdd) {
+void AudioEngine::setRollVel(int padIndex, int step, int vel) {
+    if (padIndex < 0 || padIndex >= kNumPads) return;
+    if (step < 0 || step >= kSteps) return;
+    if (vel < 10) vel = 10;
+    if (vel > 150) vel = 150;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    rollVel[b][padIndex][step].store(vel, std::memory_order_relaxed);
+}
+
+void AudioEngine::triggerVoice(int padIndex, double semiAdd, double vel) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
     }
@@ -895,6 +905,7 @@ void AudioEngine::triggerVoice(int padIndex, double semiAdd) {
 
     voice.bank = b;
     voice.nextPitchAdd.store(semiAdd, std::memory_order_relaxed);
+    voice.nextVel.store(vel, std::memory_order_relaxed);
     voice.gateClosed.store(false, std::memory_order_relaxed);
     voice.type.store(padIndex, std::memory_order_relaxed);
     voice.hasNextSample.store(true, std::memory_order_relaxed);
@@ -908,7 +919,7 @@ void AudioEngine::triggerPad(int padIndex) {
     if (padIndex < 0 || padIndex >= kNumPads) {
         return;
     }
-    triggerVoice(padIndex, 0.0);
+    triggerVoice(padIndex, 0.0, 1.0);
 }
 
 void AudioEngine::fireStep(int step) {
@@ -924,13 +935,13 @@ void AudioEngine::fireStep(int step) {
 
         const int m = seqMask[b][p].load(std::memory_order_relaxed);
         if ((m & (1 << step)) != 0) {
-            triggerVoice(p, 0.0);
+            triggerVoice(p, 0.0, rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
         }
 
         const int rp = rollPitch[b][p][step].load(std::memory_order_relaxed);
         if (rp != 0) {
             const int len = rollLen[b][p][step].load(std::memory_order_relaxed);
-            triggerVoice(p, static_cast<double>(rp - 13));
+            triggerVoice(p, static_cast<double>(rp - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
             rollEndAt[p] = step + (len > 0 ? len : 1);
         }
     }
@@ -1184,7 +1195,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 v.phase = 0.0;
                 v.phase2 = 0.0;
                 v.prevNoise = 0.0;
-                v.amp = 1.0;
+                v.amp = v.nextVel.load(std::memory_order_relaxed);
                 v.rng = 123456789u + static_cast<uint32_t>(type) * 999983u;
 
                 v.pitchAddSemi = v.nextPitchAdd.load(std::memory_order_relaxed);

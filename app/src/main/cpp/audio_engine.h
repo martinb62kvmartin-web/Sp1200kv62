@@ -111,6 +111,7 @@ private:
         double loopEnd = 0.0;
 
         std::atomic<double> nextPitchAdd{0.0};
+        std::atomic<double> nextVel{1.0};
         double pitchAddSemi = 0.0;
         double rate = 1.0;
         double aT = 0.0;
@@ -134,7 +135,8 @@ private:
 
     double renderVoice(Voice& voice);
     double nextNoise(Voice& voice);
-    void triggerVoice(int padIndex, double semiAdd);
+    void triggerVoice(int padIndex, double semiAdd, double vel);
+    void setRollVel(int padIndex, int step, int vel);
     void fireStep(int step);
     std::shared_ptr<Sample> parseWav(const std::vector<uint8_t>& bytes);
 
@@ -171,6 +173,7 @@ private:
     std::array<std::array<std::atomic<int>, kNumPads>, kBanks> seqMask{};
     std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollPitch{};
     std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollLen{};
+    std::array<std::array<std::array<std::atomic<int>, kSteps>, kNumPads>, kBanks> rollVel{};
     std::array<int, kNumPads> rollEndAt{};
     double totalFrames = 0.0;
     double nextStepFrame = 0.0;

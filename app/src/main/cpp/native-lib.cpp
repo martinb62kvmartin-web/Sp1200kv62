@@ -191,6 +191,13 @@ Java_com_example_sp1200_MainActivity_nativeSeqSetMask(JNIEnv*, jobject, jint pad
 }
 
 JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetRollVel(JNIEnv*, jobject, jint padIndex, jint step, jint vel) {
+    if (engine != nullptr) {
+        engine->setRollVel(padIndex, static_cast<int>(step), static_cast<int>(vel));
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSetRoll(JNIEnv*, jobject, jint padIndex, jint step, jint value, jint len) {
     if (engine != nullptr) {
         engine->setRoll(padIndex, static_cast<int>(step), static_cast<int>(value), static_cast<int>(len));

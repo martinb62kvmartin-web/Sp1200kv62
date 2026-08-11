@@ -172,6 +172,7 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSeqSetSwing(swing: Float)
     private external fun nativeSeqSetMask(padIndex: Int, mask: Int)
     private external fun nativeSetRoll(padIndex: Int, step: Int, value: Int, len: Int)
+    private external fun nativeSetRollVel(padIndex: Int, step: Int, vel: Int)
     private external fun nativeSetLoopPoints(padIndex: Int, startFrac: Float, endFrac: Float)
     private external fun nativeSetLoopOn(padIndex: Int, enabled: Boolean)
     private external fun nativeTrimToLoop(padIndex: Int): Boolean
@@ -228,6 +229,7 @@ class MainActivity : ComponentActivity() {
     private var patternBanks by mutableStateOf(List(4) { List(16) { 0 } })
     private var rollBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
     private var rollLenBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
+    private var velBanks by mutableStateOf(List(4) { List(16) { List(16) { 100 } } })
     private var noteLen by mutableStateOf(1)
     private var mutes by mutableStateOf(List(16) { false })
     private var solos by mutableStateOf(List(16) { false })
@@ -780,6 +782,12 @@ class MainActivity : ComponentActivity() {
                 bo.put("roll", rollArr)
                 bo.put("rolllen", rollLenArr)
 
+                val velArr = JSONArray()
+                for (p in 0 until 16) {
+                    velArr.put(JSONArray(velBanks[b][p]))
+                }
+                bo.put("vel", velArr)
+
                 val revArr = JSONArray()
                 for (p in 0 until 16) {
                     revArr.put(reverseBanks[b][p])
@@ -882,6 +890,7 @@ class MainActivity : ComponentActivity() {
             val newPatterns = patternBanks.toMutableList()
             val newRolls = rollBanks.toMutableList()
             val newRollLens = rollLenBanks.toMutableList()
+            val newVels = velBanks.toMutableList()
             val newRev = reverseBanks.toMutableList()
             val newStretch = stretchBanks.toMutableList()
             val newTone = toneBanks.toMutableList()
@@ -918,6 +927,15 @@ class MainActivity : ComponentActivity() {
                         rows[p] = (0 until 16).map { st.optInt(it, 0) }
                     }
                     newRollLens[b] = rows
+                }
+
+                bo.optJSONArray("vel")?.let { va2 ->
+                    val rows = velBanks[b].toMutableList()
+                    for (p in 0 until minOf(16, va2.length())) {
+                        val st = va2.optJSONArray(p) ?: continue
+                        rows[p] = (0 until 16).map { st.optInt(it, 100) }
+                    }
+                    newVels[b] = rows
                 }
 
                 bo.optJSONArray("rev")?.let { rv ->
@@ -972,6 +990,7 @@ class MainActivity : ComponentActivity() {
             patternBanks = newPatterns
             rollBanks = newRolls
             rollLenBanks = newRollLens
+            velBanks = newVels
             reverseBanks = newRev
             stretchBanks = newStretch
             toneBanks = newTone
@@ -1010,6 +1029,7 @@ class MainActivity : ComponentActivity() {
                 nativeSeqSetMask(p, patternBanks[b][p])
                 for (st in 0 until 16) {
                     nativeSetRoll(p, st, rollBanks[b][p][st], rollLenBanks[b][p][st])
+                    nativeSetRollVel(p, st, velBanks[b][p][st])
                 }
                 nativeSetLoopPoints(p, loopStartBanks[b][p] / 100f, loopEndBanks[b][p] / 100f)
                 nativeSetLoopOn(p, loopOnBanks[b][p])
@@ -1928,6 +1948,18 @@ fun Sp1200App(
                 onMuteToggle = onMuteToggle,
                 solos = solos,
                 onSoloToggle = onSoloToggle,
+                vels = velBanks[bank],
+                onVel = { pad, st, d ->
+                    val cur = velBanks[bank][pad][st]
+                    val next = (cur + d.toInt()).coerceIn(10, 150)
+                    if (next != cur) {
+                        velBanks = velBanks.set2(
+                            bank, pad,
+                            velBanks[bank][pad].toMutableList().also { it[st] = next }
+                        )
+                        nativeSetRollVel(pad, st, next)
+                    }
+                },
                 playhead = playhead,
                 playing = playing
             )
@@ -2473,6 +2505,8 @@ fun SequencerGrid(
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
     onSoloToggle: (Int) -> Unit,
+    vels: List<List<Int>>,
+    onVel: (Int, Int, Float) -> Unit,
     playhead: Int,
     playing: Boolean
 ) {
@@ -2504,6 +2538,7 @@ fun SequencerGrid(
                 ) { Text("S", color = Color(0xFF06201D), fontSize = 8.sp) }
                 for (step in 0 until 16) {
                     val on = (pattern[pad] ushr step) and 1 == 1
+                    val vel = vels[pad][step]
                     val offColor = when {
                         playing && step == playhead -> Color(0xFF3A2F55)
                         step % 4 == 0 -> Color(0xFF2E2447)
@@ -2512,8 +2547,21 @@ fun SequencerGrid(
                     Box(
                         modifier = Modifier.weight(1f).height(24.dp)
                             .clip(RoundedCornerShape(4.dp))
-                            .background(if (on) C_PINK else offColor)
-                            .clickable { onToggleStep(pad, step) }
+                            .background(
+                                if (on) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else offColor
+                            )
+                            .pointerInput(on) {
+                                if (!on) {
+                                    detectTapGestures(onTap = { onToggleStep(pad, step) })
+                                } else {
+                                    detectDragGestures(
+                                        onDragEnd = { }
+                                    ) { change, drag ->
+                                        change.consume()
+                                        onVel(pad, step, -drag.y / 2f)
+                                    }
+                                }
+                            }
                     )
                 }
             }
