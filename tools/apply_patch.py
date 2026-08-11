@@ -6,9 +6,10 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-a("""import androidx.compose.animation.core.RepeatMode""", """import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.ui.graphics.toArgb""")
+a("""        val zoomRef = rememberUpdatedState(zoom)""", """        val zoomRef = rememberUpdatedState(zoom)
+        val lineColor = C_CYAN""")
+
+a("""                    drawLine(C_CYAN, Offset(x, h / 2 - p + off), Offset(x, h / 2 + p + off), width / bars)""", """                    drawLine(lineColor, Offset(x, h / 2 - p + off), Offset(x, h / 2 + p + off), width / bars)""")
 
 def main():
     for path, old, new in P:
