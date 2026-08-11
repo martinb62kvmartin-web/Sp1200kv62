@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
@@ -200,6 +201,7 @@ class MainActivity : ComponentActivity() {
     private var exportWasPlaying = false
     private var reverseBanks by mutableStateOf(List(4) { List(16) { false } })
     private var stretchBanks by mutableStateOf(List(4) { List(16) { 0 } })
+    private var toneBanks by mutableStateOf(List(4) { List(16) { 50f } })
     private var padPeaks by mutableStateOf(List(16) { FloatArray(0) })
 
     private var selectedPad by mutableStateOf(0)
@@ -739,6 +741,12 @@ class MainActivity : ComponentActivity() {
                 }
                 bo.put("stretch", stArr)
 
+                val toneArr = JSONArray()
+                for (p in 0 until 16) {
+                    toneArr.put(toneBanks[b][p])
+                }
+                bo.put("tone", toneArr)
+
                 val loopsArr = JSONArray()
                 for (p in 0 until 16) {
                     val lo = JSONObject()
@@ -805,6 +813,7 @@ class MainActivity : ComponentActivity() {
             val newRollLens = rollLenBanks.toMutableList()
             val newRev = reverseBanks.toMutableList()
             val newStretch = stretchBanks.toMutableList()
+            val newTone = toneBanks.toMutableList()
             val newLS = loopStartBanks.toMutableList()
             val newLE = loopEndBanks.toMutableList()
             val newLO = loopOnBanks.toMutableList()
@@ -851,6 +860,14 @@ class MainActivity : ComponentActivity() {
                     newStretch[b] = rows
                 }
 
+                bo.optJSONArray("tone")?.let { ta ->
+                    val rows = toneBanks[b].toMutableList()
+                    for (p in 0 until minOf(16, ta.length())) {
+                        rows[p] = ta.optDouble(p, 50.0).toFloat()
+                    }
+                    newTone[b] = rows
+                }
+
                 bo.optJSONArray("loops")?.let { la ->
                     for (p in 0 until minOf(16, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
@@ -877,6 +894,7 @@ class MainActivity : ComponentActivity() {
             rollLenBanks = newRollLens
             reverseBanks = newRev
             stretchBanks = newStretch
+            toneBanks = newTone
             loopStartBanks = newLS
             loopEndBanks = newLE
             loopOnBanks = newLO
@@ -1351,6 +1369,25 @@ class MainActivity : ComponentActivity() {
                             stretchBanks = stretchBanks.set2(bank, selectedPad, v)
                             nativeSetPadStretch(selectedPad, v)
                         },
+                        padAttack = attackBanks[bank][selectedPad],
+                        onPadAttack = { value ->
+                            attackBanks = attackBanks.set2(bank, selectedPad, value)
+                            pushPadParams(selectedPad)
+                        },
+                        padRelease = releaseBanks[bank][selectedPad],
+                        onPadRelease = { value ->
+                            releaseBanks = releaseBanks.set2(bank, selectedPad, value)
+                            pushPadParams(selectedPad)
+                        },
+                        padTone = toneBanks[bank][selectedPad],
+                        onPadTone = { value ->
+                            toneBanks = toneBanks.set2(bank, selectedPad, value)
+                        },
+                        onExport = { startExport() },
+                        onTool = { name ->
+                            Toast.makeText(this, "$name: soon", Toast.LENGTH_SHORT).show()
+                        },
+                        onPreviewPad = { nativeTriggerPad(selectedPad) },
                         crunch = crunch,
                         onCrunchChange = { enabled ->
                             crunch = enabled
@@ -1810,7 +1847,16 @@ fun Sp1200App(
                 swing = swing,
                 onSwingChange = onSwingChange,
                 stretch = stretch,
-                onStretch = onStretch
+                onStretch = onStretch,
+                padAttack = padAttack,
+                onPadAttack = onPadAttack,
+                padRelease = padRelease,
+                onPadRelease = onPadRelease,
+                padTone = padTone,
+                onPadTone = onPadTone,
+                onExport = onExport,
+                onTool = onTool,
+                onPreviewPad = onPreviewPad
             )
         }
     }
@@ -1851,9 +1897,23 @@ fun SampleView(
     swing: Float,
     onSwingChange: (Float) -> Unit,
     stretch: Int,
-    onStretch: (Int) -> Unit
+    onStretch: (Int) -> Unit,
+    padAttack: Float,
+    onPadAttack: (Float) -> Unit,
+    padRelease: Float,
+    onPadRelease: (Float) -> Unit,
+    padTone: Float,
+    onPadTone: (Float) -> Unit,
+    onExport: () -> Unit,
+    onTool: (String) -> Unit,
+    onPreviewPad: () -> Unit
 ) {
     var showBpm by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf(0) }
+    var showStretch by remember { mutableStateOf(false) }
+    var showTools by remember { mutableStateOf(false) }
+    var algo by remember { mutableStateOf(0) }
+    var stretchLen by remember { mutableStateOf(4) }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1883,18 +1943,31 @@ fun SampleView(
                     shake = if (flashes[selectedPad]) pollTick else 0,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(110.dp)
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    KBtn("<", false, { onSelectPad((selectedPad + 15) % 16) }, Modifier.size(38.dp))
-                    KBtn("ONE SHOT", !gateMode, { onGateModeChange(!gateMode) }, Modifier.weight(1f).height(42.dp))
-                    KBtn("REVERSE", reverse, { onReverseToggle() }, Modifier.weight(1f).height(42.dp))
-                    KBtn("LOOP", loopOn, { onLoopToggle() }, Modifier.weight(1f).height(42.dp))
-                    KBtn(">", false, { onSelectPad((selectedPad + 1) % 16) }, Modifier.size(38.dp))
+                    KBtn("<", false, { page = (page + 2) % 3 }, Modifier.size(38.dp))
+                    when (page) {
+                        0 -> {
+                            KBtn("ONE SHOT", !gateMode, { onGateModeChange(!gateMode) }, Modifier.weight(1f).height(42.dp))
+                            KBtn("REVERSE", reverse, { onReverseToggle() }, Modifier.weight(1f).height(42.dp))
+                            KBtn("LOOP", loopOn, { onLoopToggle() }, Modifier.weight(1f).height(42.dp))
+                        }
+                        1 -> {
+                            Knob("ATK", padAttack, 0f..500f, onPadAttack)
+                            Knob("REL", padRelease, 0f..1000f, onPadRelease)
+                            Knob("TONE", padTone, 0f..100f, onPadTone)
+                        }
+                        else -> {
+                            KBtn("STRETCH", false, { showStretch = true }, Modifier.weight(1f).height(42.dp))
+                            KBtn("TOOLS", false, { showTools = true }, Modifier.weight(1f).height(42.dp))
+                        }
+                    }
+                    KBtn(">", false, { page = (page + 1) % 3 }, Modifier.size(38.dp))
                 }
             }
         }
@@ -2012,12 +2085,73 @@ fun SampleView(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            listOf(0 to "OFF", 16 to "1BAR", 32 to "2BAR", 64 to "4BAR", 4 to "1BEAT", 8 to "2BEAT").forEach { (v, label) ->
-                KBtn(label, stretch == v, { onStretch(v) }, Modifier.weight(1f).height(32.dp))
+        if (showStretch) {
+            Dialog(onDismissRequest = { showStretch = false }) {
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF3A1220))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("TIMESTRETCH", color = Color.White, fontWeight = FontWeight.Bold)
+                    KBtn(
+                        "duration: " + when (stretchLen) {
+                            4 -> "1 BEAT"
+                            8 -> "2 BEAT"
+                            16 -> "1 BAR"
+                            32 -> "2 BAR"
+                            64 -> "4 BAR"
+                            else -> "OFF"
+                        },
+                        false,
+                        {
+                            stretchLen = when (stretchLen) {
+                                4 -> 8
+                                8 -> 16
+                                16 -> 32
+                                32 -> 64
+                                else -> 4
+                            }
+                        },
+                        Modifier.fillMaxWidth().height(44.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("MODERN", "RETRO", "BEATS", "REPITCH", "CYCLIC").forEachIndexed { i, s ->
+                            KBtn(s, algo == i, { algo = i }, Modifier.weight(1f).height(36.dp))
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KBtn("PREVIEW", false, { onPreviewPad() }, Modifier.weight(1f).height(42.dp))
+                        KBtn("OK", false, { onStretch(stretchLen); showStretch = false }, Modifier.weight(1f).height(42.dp))
+                    }
+                }
+            }
+        }
+
+        if (showTools) {
+            Dialog(onDismissRequest = { showTools = false }) {
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF3A1220))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(
+                        "LABEL", "CROP", "NORMALIZE", "TRIM SILENCE", "AUTO-CHOP",
+                        "SPLIT STEMS", "MAKE MONO", "BOUNCE", "EXPORT"
+                    ).forEach { item ->
+                        KBtn(item, false, {
+                            showTools = false
+                            when (item) {
+                                "CROP" -> onTrim()
+                                "EXPORT" -> onExport()
+                                else -> onTool(item)
+                            }
+                        }, Modifier.fillMaxWidth().height(40.dp))
+                    }
+                }
             }
         }
     }
