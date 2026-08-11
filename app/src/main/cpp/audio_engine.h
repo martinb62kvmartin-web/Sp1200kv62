@@ -32,6 +32,13 @@ public:
     void setPadReverse(int padIndex, bool enabled);
     void setPadStretch(int padIndex, int steps);
 
+    bool normalizePad(int padIndex);
+    bool trimSilencePad(int padIndex);
+    bool makeMonoPad(int padIndex);
+    bool bouncePad(int padIndex);
+    int autoChop(int padIndex);
+    int splitStems(int padIndex);
+
     void setBank(int bank);
     void setMute(int padIndex, bool enabled);
     void setSolo(int padIndex, bool enabled);

@@ -119,6 +119,12 @@ class MainActivity : ComponentActivity() {
     private external fun nativeClearPad(padIndex: Int)
     private external fun nativeSetPadReverse(padIndex: Int, enabled: Boolean)
     private external fun nativeSetPadStretch(padIndex: Int, steps: Int)
+    private external fun nativeNormalizePad(padIndex: Int): Boolean
+    private external fun nativeTrimSilencePad(padIndex: Int): Boolean
+    private external fun nativeMakeMonoPad(padIndex: Int): Boolean
+    private external fun nativeBouncePad(padIndex: Int): Boolean
+    private external fun nativeAutoChop(padIndex: Int): Int
+    private external fun nativeSplitStems(padIndex: Int): Int
     private external fun nativeSeqSetPlaying(playing: Boolean)
     private external fun nativeSeqSetBpm(bpm: Float)
     private external fun nativeSeqSetSwing(swing: Float)
@@ -202,6 +208,7 @@ class MainActivity : ComponentActivity() {
     private var reverseBanks by mutableStateOf(List(4) { List(16) { false } })
     private var stretchBanks by mutableStateOf(List(4) { List(16) { 0 } })
     private var toneBanks by mutableStateOf(List(4) { List(16) { 50f } })
+    private var padLabels by mutableStateOf(List(4) { List(16) { "" } })
     private var padPeaks by mutableStateOf(List(16) { FloatArray(0) })
 
     private var selectedPad by mutableStateOf(0)
@@ -747,6 +754,12 @@ class MainActivity : ComponentActivity() {
                 }
                 bo.put("tone", toneArr)
 
+                val labArr = JSONArray()
+                for (p in 0 until 16) {
+                    labArr.put(padLabels[b][p])
+                }
+                bo.put("labels", labArr)
+
                 val loopsArr = JSONArray()
                 for (p in 0 until 16) {
                     val lo = JSONObject()
@@ -814,6 +827,7 @@ class MainActivity : ComponentActivity() {
             val newRev = reverseBanks.toMutableList()
             val newStretch = stretchBanks.toMutableList()
             val newTone = toneBanks.toMutableList()
+            val newLabels = padLabels.toMutableList()
             val newLS = loopStartBanks.toMutableList()
             val newLE = loopEndBanks.toMutableList()
             val newLO = loopOnBanks.toMutableList()
@@ -868,6 +882,14 @@ class MainActivity : ComponentActivity() {
                     newTone[b] = rows
                 }
 
+                bo.optJSONArray("labels")?.let { la2 ->
+                    val rows = padLabels[b].toMutableList()
+                    for (p in 0 until minOf(16, la2.length())) {
+                        rows[p] = la2.optString(p, "")
+                    }
+                    newLabels[b] = rows
+                }
+
                 bo.optJSONArray("loops")?.let { la ->
                     for (p in 0 until minOf(16, la.length())) {
                         val lo = la.optJSONObject(p) ?: continue
@@ -895,6 +917,7 @@ class MainActivity : ComponentActivity() {
             reverseBanks = newRev
             stretchBanks = newStretch
             toneBanks = newTone
+            padLabels = newLabels
             loopStartBanks = newLS
             loopEndBanks = newLE
             loopOnBanks = newLO
@@ -1384,7 +1407,52 @@ class MainActivity : ComponentActivity() {
                             toneBanks = toneBanks.set2(bank, selectedPad, value)
                         },
                         onTool = { name ->
-                            Toast.makeText(this, "$name: soon", Toast.LENGTH_SHORT).show()
+                            when (name) {
+                                "NORMALIZE" -> {
+                                    nativeNormalizePad(selectedPad)
+                                    peaks = nativeGetPeaks(selectedPad, 200)
+                                    refreshPadPeaks()
+                                }
+                                "TRIM SILENCE" -> {
+                                    nativeTrimSilencePad(selectedPad)
+                                    peaks = nativeGetPeaks(selectedPad, 200)
+                                    refreshPadPeaks()
+                                }
+                                "MAKE MONO" -> {
+                                    nativeMakeMonoPad(selectedPad)
+                                    Toast.makeText(this, "Mono OK", Toast.LENGTH_SHORT).show()
+                                }
+                                "BOUNCE" -> {
+                                    nativeBouncePad(selectedPad)
+                                    peaks = nativeGetPeaks(selectedPad, 200)
+                                    refreshPadPeaks()
+                                    Toast.makeText(this, "Bounced 12bit", Toast.LENGTH_SHORT).show()
+                                }
+                                "AUTO-CHOP" -> {
+                                    val n = nativeAutoChop(selectedPad)
+                                    if (n > 0) {
+                                        loadedBanks = loadedBanks.toMutableList().also {
+                                            it[bank] = (0 until 16).toSet()
+                                        }
+                                        refreshPadPeaks()
+                                        Toast.makeText(this, "Chopped to 16 pads", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                "SPLIT STEMS" -> {
+                                    val n = nativeSplitStems(selectedPad)
+                                    if (n > 0) {
+                                        loadedBanks = loadedBanks.toMutableList().also {
+                                            it[bank] = it[bank] + selectedPad + ((selectedPad + 1) % 16)
+                                        }
+                                        refreshPadPeaks()
+                                        Toast.makeText(this, "Low/High split done", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        },
+                        labels = padLabels[bank],
+                        onLabel = { text ->
+                            padLabels = padLabels.set2(bank, selectedPad, text)
                         },
                         onPreviewPad = { nativeTriggerPad(selectedPad) },
                         crunch = crunch,
@@ -1727,7 +1795,9 @@ fun Sp1200App(
     padTone: Float,
     onPadTone: (Float) -> Unit,
     onTool: (String) -> Unit,
-    onPreviewPad: () -> Unit
+    onPreviewPad: () -> Unit,
+    labels: List<String>,
+    onLabel: (String) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -1863,7 +1933,9 @@ fun Sp1200App(
                 onPadTone = onPadTone,
                 onExport = onExport,
                 onTool = onTool,
-                onPreviewPad = onPreviewPad
+                onPreviewPad = onPreviewPad,
+                labels = labels,
+                onLabel = onLabel
             )
         }
     }
@@ -1919,6 +1991,7 @@ fun SampleView(
     var page by remember { mutableStateOf(0) }
     var showStretch by remember { mutableStateOf(false) }
     var showTools by remember { mutableStateOf(false) }
+    var showLabel by remember { mutableStateOf(false) }
     var algo by remember { mutableStateOf(0) }
     var stretchLen by remember { mutableStateOf(4) }
     Column(
@@ -2136,6 +2209,31 @@ fun SampleView(
             }
         }
 
+        if (showLabel) {
+            Dialog(onDismissRequest = { showLabel = false }) {
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF3A1220))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("LABEL", color = Color.White, fontWeight = FontWeight.Bold)
+                    var txt by remember { mutableStateOf(labels[selectedPad]) }
+                    TextField(
+                        value = txt,
+                        onValueChange = { txt = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    KBtn("OK", false, {
+                        onLabel(txt)
+                        showLabel = false
+                    }, Modifier.fillMaxWidth().height(42.dp))
+                }
+            }
+        }
+
         if (showTools) {
             Dialog(onDismissRequest = { showTools = false }) {
                 Column(
@@ -2154,6 +2252,7 @@ fun SampleView(
                             when (item) {
                                 "CROP" -> onTrim()
                                 "EXPORT" -> onExport()
+                                "LABEL" -> showLabel = true
                                 else -> onTool(item)
                             }
                         }, Modifier.fillMaxWidth().height(40.dp))

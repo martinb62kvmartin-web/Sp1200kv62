@@ -126,6 +126,42 @@ Java_com_example_sp1200_MainActivity_nativeSetPadStretch(JNIEnv*, jobject, jint 
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeNormalizePad(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return JNI_FALSE;
+    return engine->normalizePad(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeTrimSilencePad(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return JNI_FALSE;
+    return engine->trimSilencePad(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeMakeMonoPad(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return JNI_FALSE;
+    return engine->makeMonoPad(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_example_sp1200_MainActivity_nativeBouncePad(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return JNI_FALSE;
+    return engine->bouncePad(padIndex) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_sp1200_MainActivity_nativeAutoChop(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return 0;
+    return static_cast<jint>(engine->autoChop(padIndex));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_sp1200_MainActivity_nativeSplitStems(JNIEnv*, jobject, jint padIndex) {
+    if (engine == nullptr) return 0;
+    return static_cast<jint>(engine->splitStems(padIndex));
+}
+
 JNIEXPORT void JNICALL
 Java_com_example_sp1200_MainActivity_nativeSeqSetPlaying(JNIEnv*, jobject, jboolean playing) {
     if (engine != nullptr) {

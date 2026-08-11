@@ -205,6 +205,124 @@ void AudioEngine::setPadStretch(int padIndex, int steps) {
     padStretch[b][padIndex].store(steps, std::memory_order_relaxed);
 }
 
+static void saveSampleToDir(const std::string& dir, int b, int p, const std::vector<float>& data, uint32_t rate) {
+    if (dir.empty() || data.empty()) return;
+    const std::string path = dir + "/b" + std::to_string(b) + "_p" + std::to_string(p) + ".wav";
+    writeWavFile(path, data, rate, 1);
+}
+
+bool AudioEngine::normalizePad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return false;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    auto s = samples[b][padIndex];
+    if (!s || s->data.empty()) return false;
+    float m = 0.0f;
+    for (float v : s->data) { const float a = v < 0 ? -v : v; if (a > m) m = a; }
+    if (m < 0.0001f) return false;
+    const float k = 1.0f / m;
+    for (float& v : s->data) v *= k;
+    saveSampleToDir(dataDir, b, padIndex, s->data, static_cast<uint32_t>(s->sampleRate));
+    return true;
+}
+
+bool AudioEngine::trimSilencePad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return false;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    auto s = samples[b][padIndex];
+    if (!s || s->data.empty()) return false;
+    const float th = 0.02f;
+    size_t i0 = 0, i1 = s->data.size();
+    while (i0 < i1) { const float a = s->data[i0] < 0 ? -s->data[i0] : s->data[i0]; if (a > th) break; i0++; }
+    while (i1 > i0) { const float a = s->data[i1 - 1] < 0 ? -s->data[i1 - 1] : s->data[i1 - 1]; if (a > th) break; i1--; }
+    if (i1 <= i0 || (i0 == 0 && i1 == s->data.size())) return false;
+    std::vector<float> cut(s->data.begin() + i0, s->data.begin() + i1);
+    auto dst = std::make_shared<Sample>();
+    dst->sampleRate = s->sampleRate;
+    dst->data = std::move(cut);
+    samples[b][padIndex] = dst;
+    saveSampleToDir(dataDir, b, padIndex, dst->data, static_cast<uint32_t>(dst->sampleRate));
+    return true;
+}
+
+bool AudioEngine::makeMonoPad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return false;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    return samples[b][padIndex] != nullptr;
+}
+
+bool AudioEngine::bouncePad(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return false;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    auto s = samples[b][padIndex];
+    if (!s || s->data.empty()) return false;
+    float st = 0.0f;
+    for (float& v : s->data) {
+        st += 0.35f * (v - st);
+        v = vintage(st);
+    }
+    saveSampleToDir(dataDir, b, padIndex, s->data, static_cast<uint32_t>(s->sampleRate));
+    return true;
+}
+
+int AudioEngine::autoChop(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return 0;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    std::shared_ptr<const Sample> src;
+    {
+        std::lock_guard<std::mutex> lock(sampleMutex);
+        src = samples[b][padIndex];
+        if (!src || src->data.empty()) return 0;
+    }
+    const size_t n = src->data.size();
+    const int slices = 16;
+    for (int p = 0; p < slices; ++p) {
+        size_t a = n * static_cast<size_t>(p) / slices;
+        size_t z = n * static_cast<size_t>(p + 1) / slices;
+        if (z <= a) z = a + 1;
+        auto dst = std::make_shared<Sample>();
+        dst->sampleRate = src->sampleRate;
+        dst->data.assign(src->data.begin() + a, src->data.begin() + z);
+        {
+            std::lock_guard<std::mutex> lock(sampleMutex);
+            samples[b][p] = dst;
+        }
+        saveSampleToDir(dataDir, b, p, dst->data, static_cast<uint32_t>(dst->sampleRate));
+    }
+    return slices;
+}
+
+int AudioEngine::splitStems(int padIndex) {
+    if (padIndex < 0 || padIndex >= kNumPads) return 0;
+    const int b = currentBank.load(std::memory_order_relaxed);
+    const int p2 = (padIndex + 1) % kNumPads;
+    std::lock_guard<std::mutex> lock(sampleMutex);
+    auto s = samples[b][padIndex];
+    if (!s || s->data.empty()) return 0;
+    std::vector<float> low(s->data.size()), high(s->data.size());
+    float lp = 0.0f;
+    const float k = 0.15f;
+    for (size_t i = 0; i < s->data.size(); ++i) {
+        lp += k * (s->data[i] - lp);
+        low[i] = lp;
+        high[i] = s->data[i] - lp;
+    }
+    auto dLow = std::make_shared<Sample>();
+    dLow->sampleRate = s->sampleRate;
+    dLow->data = std::move(low);
+    auto dHigh = std::make_shared<Sample>();
+    dHigh->sampleRate = s->sampleRate;
+    dHigh->data = std::move(high);
+    samples[b][padIndex] = dLow;
+    samples[b][p2] = dHigh;
+    saveSampleToDir(dataDir, b, padIndex, dLow->data, static_cast<uint32_t>(dLow->sampleRate));
+    saveSampleToDir(dataDir, b, p2, dHigh->data, static_cast<uint32_t>(dHigh->sampleRate));
+    return 2;
+}
+
 void AudioEngine::startCapture() {
     std::lock_guard<std::mutex> lock(capMutex);
     capBuf.clear();
