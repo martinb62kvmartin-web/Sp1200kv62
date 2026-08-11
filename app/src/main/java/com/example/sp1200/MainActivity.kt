@@ -1383,7 +1383,6 @@ class MainActivity : ComponentActivity() {
                         onPadTone = { value ->
                             toneBanks = toneBanks.set2(bank, selectedPad, value)
                         },
-                        onExport = { startExport() },
                         onTool = { name ->
                             Toast.makeText(this, "$name: soon", Toast.LENGTH_SHORT).show()
                         },
@@ -1720,7 +1719,15 @@ fun Sp1200App(
     crunch: Boolean,
     onCrunchChange: (Boolean) -> Unit,
     stretch: Int,
-    onStretch: (Int) -> Unit
+    onStretch: (Int) -> Unit,
+    padAttack: Float,
+    onPadAttack: (Float) -> Unit,
+    padRelease: Float,
+    onPadRelease: (Float) -> Unit,
+    padTone: Float,
+    onPadTone: (Float) -> Unit,
+    onTool: (String) -> Unit,
+    onPreviewPad: () -> Unit
 ) {
     Column(
         modifier = Modifier
