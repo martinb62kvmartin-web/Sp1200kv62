@@ -2680,6 +2680,7 @@ fun WaveEditor(
     BoxWithConstraints(modifier = modifier) {
         val w = constraints.maxWidth.toFloat()
         val vsRef = rememberUpdatedState(viewStart)
+        val zoomRef = rememberUpdatedState(zoom)
 
         Canvas(
             modifier = Modifier
