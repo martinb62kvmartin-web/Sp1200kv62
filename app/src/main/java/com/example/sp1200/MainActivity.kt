@@ -1897,13 +1897,14 @@ fun SampleView(
             }
         }
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(4),
-            modifier = Modifier.height(560.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(16) { index ->
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            for (row in 0 until 4) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    for (col in 0 until 4) {
+                        val index = row * 4 + col
                 val has = loadedPads.contains(index)
                 val flash = flashes[index]
                 Box(
