@@ -2679,16 +2679,22 @@ fun WaveEditor(
 
     BoxWithConstraints(modifier = modifier) {
         val w = constraints.maxWidth.toFloat()
+        val vsRef = rememberUpdatedState(viewStart)
 
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .background(C_WAVEBG)
-                .pointerInput(zoom) {
-                    detectTransformGestures { _, pan, zoomChange, _ ->
-                        zoom = (zoom * zoomChange).coerceIn(1f, 32f)
-                        val vw = 1f / zoom
-                        center = (center - pan.x / w * vw).coerceIn(vw / 2f, 1f - vw / 2f)
+                .pointerInput(Unit) {
+                    detectTransformGestures { centroid, pan, zoomChange, _ ->
+                        val oldZ = zoomRef.value
+                        val z = (oldZ * zoomChange).coerceIn(1f, 64f)
+                        val oldVw = 1f / oldZ
+                        val newVw = 1f / z
+                        val anchor = vsRef.value + (centroid.x / w) * oldVw
+                        val ns = anchor - (centroid.x / w) * newVw - (pan.x / w) * newVw
+                        zoom = z
+                        center = (ns + newVw / 2f).coerceIn(newVw / 2f, 1f - newVw / 2f)
                     }
                 }
         ) {

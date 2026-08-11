@@ -221,8 +221,12 @@ bool AudioEngine::normalizePad(int padIndex) {
     for (float v : s->data) { const float a = v < 0 ? -v : v; if (a > m) m = a; }
     if (m < 0.0001f) return false;
     const float k = 1.0f / m;
-    for (float& v : s->data) v *= k;
-    saveSampleToDir(dataDir, b, padIndex, s->data, static_cast<uint32_t>(s->sampleRate));
+    auto dst = std::make_shared<Sample>();
+    dst->sampleRate = s->sampleRate;
+    dst->data = s->data;
+    for (float& v : dst->data) v *= k;
+    samples[b][padIndex] = dst;
+    saveSampleToDir(dataDir, b, padIndex, dst->data, static_cast<uint32_t>(dst->sampleRate));
     return true;
 }
 
@@ -259,12 +263,16 @@ bool AudioEngine::bouncePad(int padIndex) {
     std::lock_guard<std::mutex> lock(sampleMutex);
     auto s = samples[b][padIndex];
     if (!s || s->data.empty()) return false;
+    auto dst = std::make_shared<Sample>();
+    dst->sampleRate = s->sampleRate;
+    dst->data = s->data;
     float st = 0.0f;
-    for (float& v : s->data) {
+    for (float& v : dst->data) {
         st += 0.35f * (v - st);
         v = vintage(st);
     }
-    saveSampleToDir(dataDir, b, padIndex, s->data, static_cast<uint32_t>(s->sampleRate));
+    samples[b][padIndex] = dst;
+    saveSampleToDir(dataDir, b, padIndex, dst->data, static_cast<uint32_t>(dst->sampleRate));
     return true;
 }
 
