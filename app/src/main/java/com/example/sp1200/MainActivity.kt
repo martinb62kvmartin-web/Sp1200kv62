@@ -1985,7 +1985,9 @@ fun SampleView(
     onPadTone: (Float) -> Unit,
     onExport: () -> Unit,
     onTool: (String) -> Unit,
-    onPreviewPad: () -> Unit
+    onPreviewPad: () -> Unit,
+    labels: List<String>,
+    onLabel: (String) -> Unit
 ) {
     var showBpm by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(0) }
@@ -2092,6 +2094,7 @@ fun SampleView(
                         .pointerInput(index) {
                             detectTapGestures(
                                 onPress = {
+                                    onSelectPad(index)
                                     onPadDown(index)
                                     tryAwaitRelease()
                                     onPadUp(index)
@@ -2111,9 +2114,10 @@ fun SampleView(
                         )
                     }
                     Text(
-                        text = "${index + 1}",
+                        text = labels[index].ifEmpty { "${index + 1}" },
                         color = Color.White,
                         fontSize = 9.sp,
+                        maxLines = 1,
                         modifier = Modifier
                             .align(Alignment.TopStart)
                             .padding(4.dp)
