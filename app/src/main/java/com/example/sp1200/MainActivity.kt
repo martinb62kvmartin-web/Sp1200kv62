@@ -1300,6 +1300,7 @@ class MainActivity : ComponentActivity() {
                             nativeSeqSetSwing(value / 100f)
                         },
                         pattern = patternBanks[bank],
+                        vels = velBanks[bank],
                         onVel = { pad, st, d ->
                             val cur = velBanks[bank][pad][st]
                             val next = (cur + d.toInt()).coerceIn(10, 150)
@@ -2004,7 +2005,7 @@ fun Sp1200App(
                 onVel = onVel,
                 onDeleteRoll = onDeleteRoll,
                 onAudition = onAudition,
-                vels = velBanks[bank],
+                vels = vels,
                 playhead = playhead,
                 playing = playing
             )
