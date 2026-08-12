@@ -1,32 +1,57 @@
 import io
-import os
-import sys
 
-P = []
-def a(old, new):
-    P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
+PATH = "app/src/main/java/com/example/sp1200/MainActivity.kt"
 
-a("""                .pointerInput(Unit) {
-                    detectTransformGestures { centroid, pan, zoomChange, _ ->
-                        val oldZ = zoomRef.value
-                        val z = (oldZ * zoomChange).coerceIn(1f, 64f)
-                        val oldVw = 1f / oldZ
-                        val newVw = 1f / z
-                        val cx = centroid.x / w
-                        val lsX = (lsRef.value / 100f - vsRef.value) / oldVw
-                        val leX = (leRef.value / 100f - vsRef.value) / oldVw
-                        if (zoomChange == 1f && cx >= lsX && cx <= leX && centroid.y < 48f) {
-                            val d = pan.x / w * oldVw * 100f
-                            onLoopStart(lsRef.value + d)
-                            onLoopEnd(leRef.value + d)
-                        } else {
-                            val anchor = vsRef.value + cx * oldVw
-                            val ns = anchor - cx * newVw - (pan.x / w) * newVw
-                            zoom = z
-                            center = (ns + newVw / 2f).coerceIn(newVw / 2f, 1f - newVw / 2f)
-                        }
-                    }
-                }""", """                .pointerInput(Unit) {
+with io.open(PATH, "r", encoding="utf-8") as f:
+    text = f.read()
+
+# 1) импорты жестов
+if "import androidx.compose.foundation.gestures.awaitFirstDown" not in text:
+    text = text.replace(
+        "import androidx.compose.foundation.gestures.detectTapGestures",
+        "import androidx.compose.foundation.gestures.detectTapGestures\n"
+        "import androidx.compose.foundation.gestures.awaitFirstDown\n"
+        "import androidx.compose.foundation.gestures.forEachGesture\n"
+        "import androidx.compose.foundation.gestures.awaitPointerEventScope",
+        1
+    )
+    print("Patched: imports gestures")
+
+# 2) полная замена WaveEditor до конца файла
+marker = "@Composable\nfun WaveEditor("
+idx = text.find(marker)
+if idx >= 0:
+    text = text[:idx] + '''@Composable
+fun WaveEditor(
+    peaks: FloatArray,
+    loopStart: Float,
+    loopEnd: Float,
+    onLoopStart: (Float) -> Unit,
+    onLoopEnd: (Float) -> Unit,
+    shake: Int,
+    modifier: Modifier = Modifier
+) {
+    var zoom by remember { mutableStateOf(1f) }
+    var center by remember { mutableStateOf(0.5f) }
+    val viewW = 1f / zoom
+    var viewStart = center - viewW / 2f
+    if (viewStart < 0f) viewStart = 0f
+    if (viewStart > 1f - viewW) viewStart = 1f - viewW
+
+    val zoomRef = rememberUpdatedState(zoom)
+    val centerRef = rememberUpdatedState(center)
+    val vsRef = rememberUpdatedState(viewStart)
+    val lsRef = rememberUpdatedState(loopStart)
+    val leRef = rememberUpdatedState(loopEnd)
+    val lineColor = C_CYAN
+    val regionColor = C_PINK
+
+    BoxWithConstraints(modifier = modifier) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(C_WAVEBG)
+                .pointerInput(Unit) {
                     forEachGesture {
                         awaitPointerEventScope {
                             val down = awaitFirstDown()
@@ -92,51 +117,68 @@ a("""                .pointerInput(Unit) {
                             }
                         }
                     }
-                }""")
-
-a("""        Handle(xFrac = (loopStart / 100f - viewStart) / viewW, w = w, color = C_PINK) { d ->
-            onLoopStart(loopStart + d * 100f)
-        }
-        Handle(xFrac = (loopEnd / 100f - viewStart) / viewW, w = w, color = C_CYAN) { d ->
-            onLoopEnd(loopEnd + d * 100f)
-        }
-""", "")
-
-a("""                drawRect(
-                    color = regionColor,
+                }
+        ) {
+            val n = peaks.size
+            val h = size.height
+            val width = size.width
+            if (n > 0) {
+                val ls = ((loopStart / 100f - viewStart) / viewW).coerceIn(0f, 1f) * width
+                val le = ((loopEnd / 100f - viewStart) / viewW).coerceIn(0f, 1f) * width
+                drawRoundRect(
+                    color = regionColor.copy(alpha = 0.35f),
                     topLeft = Offset(ls, 0f),
-                    size = Size(le - ls, 6f)
-                )""", """                drawRect(
-                    color = regionColor,
-                    topLeft = Offset(ls, 0f),
-                    size = Size(le - ls, 6f)
+                    size = Size(le - ls, h),
+                    cornerRadius = CornerRadius(10f)
                 )
+                drawRect(color = regionColor, topLeft = Offset(ls, 0f), size = Size(le - ls, 6f))
                 drawRect(color = regionColor, topLeft = Offset(ls, 0f), size = Size(5f, h))
-                drawRect(color = regionColor, topLeft = Offset(le - 5f, 0f), size = Size(5f, h))""")
+                drawRect(color = regionColor, topLeft = Offset(le - 5f, 0f), size = Size(5f, h))
+                drawLine(Color(0x55FFFFFF), Offset(0f, h / 2), Offset(width, h / 2), 1f)
+                val off = if (shake != 0) ((shake % 3) - 1) * h * 0.04f else 0f
+                val bars = 160
+                for (bIdx in 0 until bars) {
+                    val fa = viewStart + viewW * bIdx / bars
+                    val fb = viewStart + viewW * (bIdx + 1) / bars
+                    var ia = (fa * n).toInt()
+                    var ib = (fb * n).toInt()
+                    if (ib <= ia) ib = ia + 1
+                    if (ia < 0) ia = 0
+                    if (ib > n) ib = n
+                    var m = 0f
+                    val stride = 1 + (ib - ia) / 32
+                    var i = ia
+                    while (i < ib) {
+                        val a = kotlin.math.abs(peaks[i])
+                        if (a > m) m = a
+                        i += stride
+                    }
+                    val x = (bIdx + 0.5f) * width / bars
+                    val p = m.coerceIn(0f, 1f) * (h / 2f) * 0.95f
+                    drawLine(lineColor, Offset(x, h / 2 - p + off), Offset(x, h / 2 + p + off), width / bars)
+                }
+            }
+        }
+        Text(
+            "x${zoom.toInt()}",
+            color = Color.White,
+            fontSize = 9.sp,
+            modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+        )
+    }
+}
+'''
+    print("Patched: WaveEditor rewritten")
 
-a("""                        val isNote = cover[step] >= 0
-                        val isStart = cover[step] == step
-                        val bg = when {
-                            isNote -> C_PINK
-                            playing && step == playhead -> Color(0xFF3A2F55)
-                            step % 4 == 0 -> Color(0xFF2E2447)
-                            else -> C_DARK
-                        }
-                        Box(
-                            modifier = Modifier.weight(1f).height(18.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(bg)
-                                .clickable {
-                                    onToggleRollCell(selectedPad, step, enc)
-                                }
-                        ) {
-                            if (isStart) {
-                                Box(
-                                    modifier = Modifier.fillMaxHeight().width(3.dp)
-                                        .background(Color.White)
-                                )
-                            }
-                        }""", """                        val isNote = cover[step] >= 0
+# 3) клетка piano roll, если ещё старая
+if "onResizeDelta(selectedPad, start, whole)" not in text:
+    s = text.find("val isNote = cover[step] >= 0")
+    e = text.find("if (isStart) {")
+    if s >= 0 and e >= 0:
+        e2 = text.find("}", text.find("background(Color.White)", e))
+        e3 = text.find("}", e2 + 1)
+        e4 = text.find("}", e3 + 1)
+        newCell = '''val isNote = cover[step] >= 0
                         val isStart = cover[step] == step
                         val start = cover[step]
                         val isEnd = isNote && start + rowLen[start] - 1 == step
@@ -209,21 +251,11 @@ a("""                        val isNote = cover[step] >= 0
                                         .background(Color.White)
                                 )
                             }
-                        }""")
+                        }'''
+        text = text[:s] + newCell + text[e4 + 1:]
+        print("Patched: roll cell rewritten")
 
-def main():
-    for path, old, new in P:
-        if not os.path.exists(path):
-            print("ERROR: missing file", path)
-            sys.exit(1)
-        with io.open(path, "r", encoding="utf-8") as f:
-            text = f.read()
-        if old not in text:
-            print("Skipped:", old[:60].replace("\n", " "))
-            continue
-        text = text.replace(old, new, 1)
-        with io.open(path, "w", encoding="utf-8") as f:
-            f.write(text)
-        print("Patched:", old[:60].replace("\n", " "))
+with io.open(PATH, "w", encoding="utf-8") as f:
+    f.write(text)
 
-main()
+print("Done")
