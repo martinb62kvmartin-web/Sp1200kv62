@@ -576,7 +576,7 @@ void AudioEngine::padRelease(int padIndex) {
     const bool loopHeld = loopOn[b][padIndex].load(std::memory_order_relaxed);
     const bool sampleHeld = voices[padIndex].playingSample.load(std::memory_order_relaxed);
 
-    if (gateMode.load(std::memory_order_relaxed) || loopHeld || sampleHeld) {
+    if (gateMode.load(std::memory_order_relaxed)) {
         voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
     }
 }
@@ -979,8 +979,13 @@ double AudioEngine::renderVoice(Voice& v) {
                 out = d[i] + (d[i1] - d[i]) * frac;
             }
             v.pos -= step;
-            if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos <= v.loopStart) {
-                v.pos = v.loopEnd - 1.0;
+            if (v.pos <= v.loopStart) {
+                if (v.loopEnabled) {
+                    v.pos = v.loopEnd - 1.0;
+                } else {
+                    v.amp = 0.0;
+                    return 0.0;
+                }
             }
             return out * v.amp;
         }
@@ -1002,8 +1007,13 @@ double AudioEngine::renderVoice(Voice& v) {
 
         v.pos += step;
 
-        if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos >= v.loopEnd) {
-            v.pos = v.loopStart;
+        if (v.pos >= v.loopEnd) {
+            if (v.loopEnabled) {
+                v.pos = v.loopStart;
+            } else {
+                v.amp = 0.0;
+                return 0.0;
+            }
         }
 
         return out * v.amp;
@@ -1218,12 +1228,12 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
 
                 if (v.sample && !v.sample->data.empty()) {
                     v.reverse = padRev[b][type].load(std::memory_order_relaxed);
-                    v.pos = v.reverse ? static_cast<double>(v.sample->data.size() - 2) : 0.0;
-                    if (v.pos < 0.0) v.pos = 0.0;
                     v.loopEnabled = loopOn[b][type].load(std::memory_order_relaxed);
                     const double sz = static_cast<double>(v.sample->data.size());
                     v.loopStart = loopStartFrac[b][type].load(std::memory_order_relaxed) * sz;
                     v.loopEnd = loopEndFrac[b][type].load(std::memory_order_relaxed) * sz;
+                    if (v.loopEnd <= v.loopStart + 1.0) v.loopEnd = sz;
+                    v.pos = v.reverse ? (v.loopEnd - 2.0 < 0.0 ? 0.0 : v.loopEnd - 2.0) : v.loopStart;
                 } else {
                     v.reverse = false;
                     v.pos = 0.0;
