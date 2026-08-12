@@ -1300,6 +1300,39 @@ class MainActivity : ComponentActivity() {
                             nativeSeqSetSwing(value / 100f)
                         },
                         pattern = patternBanks[bank],
+                        onVel = { pad, st, d ->
+                            val cur = velBanks[bank][pad][st]
+                            val next = (cur + d.toInt()).coerceIn(10, 150)
+                            if (next != cur) {
+                                velBanks = velBanks.set2(
+                                    bank, pad,
+                                    velBanks[bank][pad].toMutableList().also { it[st] = next }
+                                )
+                                nativeSetRollVel(pad, st, next)
+                            }
+                        },
+                        onResizeDelta = { pad, st, d ->
+                            val cur = rollLenBanks[bank][pad][st]
+                            val next = (cur + d).coerceIn(1, 16 - st)
+                            if (next != cur) {
+                                rollLenBanks = rollLenBanks.set2(
+                                    bank, pad,
+                                    rollLenBanks[bank][pad].toMutableList().also { it[st] = next }
+                                )
+                                nativeSetRoll(pad, st, rollBanks[bank][pad][st], next)
+                            }
+                        },
+                        onDeleteRoll = { pad, st ->
+                            rollBanks = rollBanks.set2(
+                                bank, pad,
+                                rollBanks[bank][pad].toMutableList().also { it[st] = 0 }
+                            )
+                            rollLenBanks = rollLenBanks.set2(
+                                bank, pad,
+                                rollLenBanks[bank][pad].toMutableList().also { it[st] = 0 }
+                            )
+                            nativeSetRoll(pad, st, 0, 1)
+                        },
                         onToggleStep = { pad, step ->
                             val newMask = patternBanks[bank][pad] xor (1 shl step)
                             patternBanks = patternBanks.set2(bank, pad, newMask)
@@ -1832,6 +1865,10 @@ fun Sp1200App(
     onSwingChange: (Float) -> Unit,
     pattern: List<Int>,
     onToggleStep: (Int, Int) -> Unit,
+    vels: List<List<Int>>,
+    onVel: (Int, Int, Float) -> Unit,
+    onResizeDelta: (Int, Int, Int) -> Unit,
+    onDeleteRoll: (Int, Int) -> Unit,
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
@@ -1948,18 +1985,8 @@ fun Sp1200App(
                 onMuteToggle = onMuteToggle,
                 solos = solos,
                 onSoloToggle = onSoloToggle,
-                vels = velBanks[bank],
-                onVel = { pad, st, d ->
-                    val cur = velBanks[bank][pad][st]
-                    val next = (cur + d.toInt()).coerceIn(10, 150)
-                    if (next != cur) {
-                        velBanks = velBanks.set2(
-                            bank, pad,
-                            velBanks[bank][pad].toMutableList().also { it[st] = next }
-                        )
-                        nativeSetRollVel(pad, st, next)
-                    }
-                },
+                vels = vels,
+                onVel = onVel,
                 playhead = playhead,
                 playing = playing
             )
@@ -1973,7 +2000,11 @@ fun Sp1200App(
                 noteLen = noteLen,
                 onNoteLenCycle = onNoteLenCycle,
                 onToggleRollCell = onToggleRollCell,
+                onResizeDelta = onResizeDelta,
+                onVel = onVel,
+                onDeleteRoll = onDeleteRoll,
                 onAudition = onAudition,
+                vels = velBanks[bank],
                 playhead = playhead,
                 playing = playing
             )
@@ -2579,7 +2610,11 @@ fun RollView(
     noteLen: Int,
     onNoteLenCycle: () -> Unit,
     onToggleRollCell: (Int, Int, Int) -> Unit,
+    onResizeDelta: (Int, Int, Int) -> Unit,
+    onVel: (Int, Int, Float) -> Unit,
+    onDeleteRoll: (Int, Int) -> Unit,
     onAudition: (Int, Int) -> Unit,
+    vels: List<List<Int>>,
     playhead: Int,
     playing: Boolean
 ) {

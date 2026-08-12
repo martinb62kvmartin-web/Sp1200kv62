@@ -48,6 +48,7 @@ public:
     void setSeqSwing(double swing);
     void setSeqMask(int padIndex, int mask);
     void setRoll(int padIndex, int step, int value, int len);
+    void setRollVel(int padIndex, int step, int vel);
 
     void setLoopPoints(int padIndex, double startFrac, double endFrac);
     void setLoopOn(int padIndex, bool enabled);
@@ -136,7 +137,6 @@ private:
     double renderVoice(Voice& voice);
     double nextNoise(Voice& voice);
     void triggerVoice(int padIndex, double semiAdd, double vel);
-    void setRollVel(int padIndex, int step, int vel);
     void fireStep(int step);
     std::shared_ptr<Sample> parseWav(const std::vector<uint8_t>& bytes);
 
