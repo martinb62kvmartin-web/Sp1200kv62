@@ -3020,6 +3020,8 @@ fun WaveEditor(
                     topLeft = Offset(ls, 0f),
                     size = Size(le - ls, 6f)
                 )
+                drawRect(color = regionColor, topLeft = Offset(ls, 0f), size = Size(5f, h))
+                drawRect(color = regionColor, topLeft = Offset(le - 5f, 0f), size = Size(5f, h))
                 drawLine(Color(0x55FFFFFF), Offset(0f, h / 2), Offset(width, h / 2), 1f)
                 val off = if (shake != 0) ((shake % 3) - 1) * h * 0.04f else 0f
                 val bars = 160
@@ -3046,12 +3048,6 @@ fun WaveEditor(
             }
         }
 
-        Handle(xFrac = (loopStart / 100f - viewStart) / viewW, w = w, color = C_PINK) { d ->
-            onLoopStart(loopStart + d * 100f)
-        }
-        Handle(xFrac = (loopEnd / 100f - viewStart) / viewW, w = w, color = C_CYAN) { d ->
-            onLoopEnd(loopEnd + d * 100f)
-        }
 
         Text(
             "x${zoom.toInt()}",
