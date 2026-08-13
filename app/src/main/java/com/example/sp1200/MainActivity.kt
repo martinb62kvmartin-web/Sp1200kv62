@@ -838,7 +838,7 @@ class MainActivity : ComponentActivity() {
             }
             root.put("banks", banksArr)
 
-            root.put("lenscale", 2)
+            root.put("lenscale", 4)
 
             val thArr = JSONArray()
             for (i in 0 until 5) {
@@ -991,9 +991,11 @@ class MainActivity : ComponentActivity() {
 
             patternBanks = newPatterns
             rollBanks = newRolls
-            if (!root.has("lenscale")) {
+            val lsOld = root.optInt("lenscale", 1)
+            if (lsOld < 4) {
+                val mult = 4 / lsOld
                 for (b2 in 0 until 4) {
-                    newRollLens[b2] = newRollLens[b2].map { row -> row.map { it * 2 } }
+                    newRollLens[b2] = newRollLens[b2].map { row -> row.map { it * mult } }
                 }
             }
             rollLenBanks = newRollLens
@@ -1321,7 +1323,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onResizeDelta = { pad, st, d ->
                             val cur = rollLenBanks[bank][pad][st]
-                            val next = (cur + d).coerceIn(1, 16 - st)
+                            val next = (cur + d).coerceIn(1, (16 - st) * 4)
                             if (next != cur) {
                                 rollLenBanks = rollLenBanks.set2(
                                     bank, pad,
@@ -2602,6 +2604,22 @@ fun SequencerGrid(
     }
 }
 
+fun fmtSteps(u: Int): String {
+    val st = u / 4f
+    return if (st == st.toInt().toFloat()) "${st.toInt()}" else "$st"
+}
+
+fun coverStartOf(row: List<Int>, rowLen: List<Int>, step: Int, enc: Int): Int {
+    if ((row[step] and (1 shl enc)) != 0) return step
+    for (s0 in 0 until step) {
+        if ((row[s0] and (1 shl enc)) != 0) {
+            val cells = (rowLen[s0] + 3) / 4
+            if (step < s0 + cells) return s0
+        }
+    }
+    return -1
+}
+
 @Composable
 fun RollView(
     selectedPad: Int,
@@ -2620,7 +2638,7 @@ fun RollView(
     playhead: Int,
     playing: Boolean
 ) {
-    var snapRoll by remember { mutableStateOf(true) }
+    var snapSel by remember { mutableStateOf(4) }
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -2661,21 +2679,13 @@ fun RollView(
             verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             items(25) { r ->
+                val enc = r
                 val pitchOff = 12 - r
-                val enc = pitchOff + 13
+                val pc = ((60 + pitchOff) % 12 + 12) % 12
+                val blackKey = pc in listOf(1, 3, 6, 8, 10)
                 val row = roll[selectedPad]
                 val rowLen = rollLens[selectedPad]
-                val cover = IntArray(16) { -1 }
-                for (s0 in 0 until 16) {
-                    if ((row[s0] and (1 shl enc)) != 0) {
-                        val L = rowLen[s0]
-                        for (s in s0 until minOf(16, s0 + (L + 1) / 2)) {
-                            if (cover[s] == -1) cover[s] = s0
-                        }
-                    }
-                }
-                val pc = ((pitchOff % 12) + 12) % 12
-                val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
+                val velRow = vels[selectedPad]
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -2684,7 +2694,7 @@ fun RollView(
                     Box(
                         modifier = Modifier.width(26.dp).height(18.dp)
                             .clip(RoundedCornerShape(3.dp))
-                            .background(if (blackKey) Color(0xFF1A1426) else Color(0xFFE8F6FC))
+                            .background(if (blackKey) Color(0xFF171021) else Color(0xFFE8F4F8))
                             .clickable { onAudition(selectedPad, pitchOff) },
                         contentAlignment = Alignment.Center
                     ) {
@@ -2693,70 +2703,75 @@ fun RollView(
                             color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
                         )
                     }
-                    for (step in 0 until 16) {
-                        val isNote = cover[step] >= 0
-                        val isStart = cover[step] == step
-                        val start = cover[step]
-                        val isEnd = isNote && start + (rowLen[start] + 1) / 2 - 1 == step
-                        val vel = if (isNote) vels[selectedPad][start] else 100
-                        val bg = when {
-                            playing && step == playhead -> Color(0x44FFFFFF)
-                            step % 4 == 0 -> Color(0xFF24303B)
-                            r % 2 == 0 -> Color(0xFF1B232C)
-                            else -> Color(0xFF161D25)
-                        }
-                        Box(
-                            modifier = Modifier.weight(1f).height(18.dp)
-                                .then(
-                                    if (isNote) Modifier else Modifier.padding(horizontal = 0.5.dp)
-                                )
-                                .clip(
-                                    RoundedCornerShape(
-                                        topStart = if (isStart) 4.dp else 0.dp,
-                                        bottomStart = if (isStart) 4.dp else 0.dp,
-                                        topEnd = if (isEnd) 4.dp else 0.dp,
-                                        bottomEnd = if (isEnd) 4.dp else 0.dp
+                    BoxWithConstraints(modifier = Modifier.weight(1f).height(18.dp)) {
+                        val w = constraints.maxWidth.toFloat()
+                        val cellW = w / 16f
+                        Canvas(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .pointerInput(row, rowLen, snapSel) {
+                                    detectTapGestures(
+                                        onTap = { pos ->
+                                            val stp = (pos.x / cellW).toInt().coerceIn(0, 15)
+                                            val st = coverStartOf(row, rowLen, stp, enc)
+                                            onToggleRollCell(selectedPad, if (st >= 0) st else stp, enc)
+                                        },
+                                        onLongPress = { pos ->
+                                            val stp = (pos.x / cellW).toInt().coerceIn(0, 15)
+                                            val st = coverStartOf(row, rowLen, stp, enc)
+                                            if (st >= 0) onDeleteRoll(selectedPad, st)
+                                        }
                                     )
-                                )
-                                .background(
-                                    if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
-                                )
-                                .pointerInput(start, isNote, isEnd, snapRoll, rowLen.getOrElse(start) { 0 }) {
+                                }
+                                .pointerInput(row, rowLen, snapSel) {
                                     var buf = 0f
-                                    if (!isNote) {
-                                        detectTapGestures(onTap = { onToggleRollCell(selectedPad, step, enc) })
-                                    } else if (isEnd) {
-                                        detectDragGestures { change, drag ->
-                                            change.consume()
-                                            val per = if (snapRoll) 1f else 2f
-                                            buf += drag.x / size.width.toFloat() * per
-                                            val whole = Math.round(buf).toInt()
-                                            if (whole != 0) {
-                                                onResizeDelta(selectedPad, start, whole)
-                                                buf -= whole.toFloat()
+                                    var last = 0
+                                    detectDragGestures { change, drag ->
+                                        change.consume()
+                                        val stp = (change.position.x / cellW).toInt().coerceIn(0, 15)
+                                        val st = coverStartOf(row, rowLen, stp, enc)
+                                        if (st >= 0) {
+                                            val lenF = rowLen[st] / 4f
+                                            val x1 = (st + lenF) * cellW
+                                            if (kotlin.math.abs(change.position.x - x1) < 28f || kotlin.math.abs(drag.x) >= kotlin.math.abs(drag.y)) {
+                                                buf += drag.x / cellW * 4f
+                                                val per = if (snapSel > 0) snapSel.toFloat() else 1f
+                                                val snapped = (Math.round(buf / per) * per).toInt()
+                                                val delta = snapped - last
+                                                if (delta != 0) {
+                                                    onResizeDelta(selectedPad, st, delta)
+                                                    last = snapped
+                                                }
+                                            } else {
+                                                onVel(selectedPad, st, -drag.y / 2f)
                                             }
                                         }
-                                    } else {
-                                        detectDragGestures { change, drag ->
-                                            change.consume()
-                                            onVel(selectedPad, start, -dySafe(drag.y))
-                                        }
-                                    }
-                                }
-                                .pointerInput(start, isNote) {
-                                    if (isNote) {
-                                        detectTapGestures(
-                                            onTap = { onToggleRollCell(selectedPad, start, enc) },
-                                            onLongPress = { onDeleteRoll(selectedPad, start) }
-                                        )
                                     }
                                 }
                         ) {
-                            if (isStart) {
-                                Box(
-                                    modifier = Modifier.fillMaxHeight().width(3.dp)
-                                        .background(Color.White)
-                                )
+                            for (s2 in 0 until 16) {
+                                val cc = when {
+                                    playing && s2 == playhead -> Color(0x44FFFFFF)
+                                    s2 % 4 == 0 -> Color(0xFF24303B)
+                                    r % 2 == 0 -> Color(0xFF1B232C)
+                                    else -> Color(0xFF161D25)
+                                }
+                            drawRect(cc, Offset(s2 * cellW + 0.5f, 0f), Size(cellW - 1f, size.height))
+                            }
+                            for (s0 in 0 until 16) {
+                                if ((row[s0] and (1 shl enc)) != 0) {
+                                    val lenF = rowLen[s0] / 4f
+                                    val x0 = s0 * cellW
+                                    val x1 = (s0 + lenF) * cellW
+                                    val vel = velRow[s0]
+                                    drawRoundRect(
+                                        color = C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)),
+                                        topLeft = Offset(x0, 1f),
+                                        size = Size((x1 - x0).coerceAtLeast(2f), size.height - 2f),
+                                        cornerRadius = CornerRadius(4f)
+                                    )
+                                    drawRect(Color.White, Offset(x0, 1f), Size(2f, size.height - 2f))
+                                }
                             }
                         }
                     }
