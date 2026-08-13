@@ -2578,16 +2578,12 @@ fun SequencerGrid(
                                 if (on) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else offColor
                             )
                             .pointerInput(on) {
-                                if (!on) {
-                                    detectTapGestures(onTap = { onToggleStep(pad, step) })
-                                } else {
-                                    var moved = false
-                                    detectDragGestures(
-                                        onDragStart = { moved = false },
-                                        onDragEnd = { if (!moved) onToggleStep(pad, step) }
-                                    ) { change, drag ->
+                                detectTapGestures(onTap = { onToggleStep(pad, step) })
+                            }
+                            .pointerInput(on) {
+                                if (on) {
+                                    detectDragGestures { change, drag ->
                                         change.consume()
-                                        moved = true
                                         onVel(pad, step, -drag.y / 2f)
                                     }
                                 }
