@@ -6,41 +6,31 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-a("""                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(1.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier.width(26.dp).height(18.dp)""", """                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier.width(26.dp).height(18.dp)""")
-
-a("""                        Box(
-                            modifier = Modifier.weight(1f).height(18.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(
-                                    if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
-                                )""", """                        Box(
-                            modifier = Modifier.weight(1f).height(18.dp)
-                                .then(
-                                    if (isNote) Modifier else Modifier.padding(horizontal = 0.5.dp)
-                                )
-                                .clip(
-                                    RoundedCornerShape(
-                                        topStart = if (isStart) 4.dp else 0.dp,
-                                        bottomStart = if (isStart) 4.dp else 0.dp,
-                                        topEnd = if (isEnd) 4.dp else 0.dp,
-                                        bottomEnd = if (isEnd) 4.dp else 0.dp
-                                    )
-                                )
-                                .background(
-                                    if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
-                                )""")
+a("""                            .pointerInput(on) {
+                                if (!on) {
+                                    detectTapGestures(onTap = { onToggleStep(pad, step) })
+                                } else {
+                                    var moved = false
+                                    detectDragGestures(
+                                        onDragStart = { moved = false },
+                                        onDragEnd = { if (!moved) onToggleStep(pad, step) }
+                                    ) { change, drag ->
+                                        change.consume()
+                                        moved = true
+                                        onVel(pad, step, -drag.y / 2f)
+                                    }
+                                }
+                            }""", """                            .pointerInput(on) {
+                                detectTapGestures(onTap = { onToggleStep(pad, step) })
+                            }
+                            .pointerInput(on) {
+                                if (on) {
+                                    detectDragGestures { change, drag ->
+                                        change.consume()
+                                        onVel(pad, step, -drag.y / 2f)
+                                    }
+                                }
+                            }""")
 
 def main():
     for path, old, new in P:
