@@ -838,6 +838,8 @@ class MainActivity : ComponentActivity() {
             }
             root.put("banks", banksArr)
 
+            root.put("lenscale", 2)
+
             val thArr = JSONArray()
             for (i in 0 until 5) {
                 thArr.put(themeGet(i).toArgb().toLong() and 0xFFFFFFFFL)
@@ -989,6 +991,11 @@ class MainActivity : ComponentActivity() {
 
             patternBanks = newPatterns
             rollBanks = newRolls
+            if (!root.has("lenscale")) {
+                for (b2 in 0 until 4) {
+                    newRollLens[b2] = newRollLens[b2].map { row -> row.map { it * 2 } }
+                }
+            }
             rollLenBanks = newRollLens
             velBanks = newVels
             reverseBanks = newRev
@@ -2661,7 +2668,7 @@ fun RollView(
                 for (s0 in 0 until 16) {
                     if ((row[s0] and (1 shl enc)) != 0) {
                         val L = rowLen[s0]
-                        for (s in s0 until minOf(16, s0 + L)) {
+                        for (s in s0 until minOf(16, s0 + (L + 1) / 2)) {
                             if (cover[s] == -1) cover[s] = s0
                         }
                     }
@@ -2689,7 +2696,7 @@ fun RollView(
                         val isNote = cover[step] >= 0
                         val isStart = cover[step] == step
                         val start = cover[step]
-                        val isEnd = isNote && start + rowLen[start] - 1 == step
+                        val isEnd = isNote && start + (rowLen[start] + 1) / 2 - 1 == step
                         val vel = if (isNote) vels[selectedPad][start] else 100
                         val bg = when {
                             playing && step == playhead -> Color(0x44FFFFFF)
@@ -2720,7 +2727,8 @@ fun RollView(
                                     } else if (isEnd) {
                                         detectDragGestures { change, drag ->
                                             change.consume()
-                                            buf += drag.x / size.width.toFloat()
+                                            val per = if (snapRoll) 1f else 2f
+                                            buf += drag.x / size.width.toFloat() * per
                                             val whole = Math.round(buf).toInt()
                                             if (whole != 0) {
                                                 onResizeDelta(selectedPad, start, whole)
@@ -2861,6 +2869,7 @@ fun SettingsView(
     onClearWallpaper: () -> Unit
 ) {
     var colorEl by remember { mutableStateOf(-1) }
+    var snapRoll by remember { mutableStateOf(true) }
     Column(
         modifier = Modifier
             .fillMaxWidth()

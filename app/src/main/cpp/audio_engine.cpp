@@ -946,7 +946,7 @@ void AudioEngine::fireStep(int step) {
                     triggerVoice(p, static_cast<double>(e - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
                 }
             }
-            rollEndAt[p] = step + (len > 0 ? len : 1);
+            rollEndAt[p] = step + ((len + 1) / 2);
         }
     }
 }
