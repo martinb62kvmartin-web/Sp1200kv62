@@ -2721,7 +2721,7 @@ fun RollView(
                                 .background(
                                     if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
                                 )
-                                .pointerInput(start, isNote, isEnd, rowLen.getOrElse(start) { 0 }) {
+                                .pointerInput(start, isNote, isEnd, snapRoll, rowLen.getOrElse(start) { 0 }) {
                                     var buf = 0f
                                     if (!isNote) {
                                         detectTapGestures(onTap = { onToggleRollCell(selectedPad, step, enc) })
