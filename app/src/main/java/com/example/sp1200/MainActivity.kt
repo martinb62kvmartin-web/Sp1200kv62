@@ -2620,6 +2620,7 @@ fun RollView(
     playhead: Int,
     playing: Boolean
 ) {
+    var snapRoll by remember { mutableStateOf(true) }
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -2869,7 +2870,6 @@ fun SettingsView(
     onClearWallpaper: () -> Unit
 ) {
     var colorEl by remember { mutableStateOf(-1) }
-    var snapRoll by remember { mutableStateOf(true) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
