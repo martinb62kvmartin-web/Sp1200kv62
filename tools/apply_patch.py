@@ -3,62 +3,200 @@ import os
 import sys
 
 P = []
+def a(old, new):
+    P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 def c(old, new):
     P.append(("app/src/main/cpp/audio_engine.cpp", old, new))
 
-c("""                    v.reverse = padRev[b][type].load(std::memory_order_relaxed);
-                    v.pos = v.reverse ? static_cast<double>(v.sample->data.size() - 2) : 0.0;
-                    if (v.pos < 0.0) v.pos = 0.0;
-                    v.loopEnabled = loopOn[b][type].load(std::memory_order_relaxed);
-                    const double sz = static_cast<double>(v.sample->data.size());
-                    v.loopStart = loopStartFrac[b][type].load(std::memory_order_relaxed) * sz;
-                    v.loopEnd = loopEndFrac[b][type].load(std::memory_order_relaxed) * sz;""", """                    v.reverse = padRev[b][type].load(std::memory_order_relaxed);
-                    v.loopEnabled = loopOn[b][type].load(std::memory_order_relaxed);
-                    const double sz = static_cast<double>(v.sample->data.size());
-                    v.loopStart = loopStartFrac[b][type].load(std::memory_order_relaxed) * sz;
-                    v.loopEnd = loopEndFrac[b][type].load(std::memory_order_relaxed) * sz;
-                    if (v.loopEnd <= v.loopStart + 1.0) v.loopEnd = sz;
-                    v.pos = v.reverse ? (v.loopEnd - 2.0 < 0.0 ? 0.0 : v.loopEnd - 2.0) : v.loopStart;""")
-
-c("""            v.pos -= step;
-            if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos <= v.loopStart) {
-                v.pos = v.loopEnd - 1.0;
-            }
-            return out * v.amp;""", """            v.pos -= step;
-            if (v.pos <= v.loopStart) {
-                if (v.loopEnabled) {
-                    v.pos = v.loopEnd - 1.0;
-                } else {
-                    v.amp = 0.0;
-                    return 0.0;
+c("""        const int rp = rollPitch[b][p][step].load(std::memory_order_relaxed);
+        if (rp != 0) {
+            const int len = rollLen[b][p][step].load(std::memory_order_relaxed);
+            triggerVoice(p, static_cast<double>(rp - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
+            rollEndAt[p] = step + (len > 0 ? len : 1);
+        }""", """        const int maskNow = rollPitch[b][p][step].load(std::memory_order_relaxed);
+        if (maskNow != 0) {
+            const int len = rollLen[b][p][step].load(std::memory_order_relaxed);
+            for (int e = 1; e <= 25; ++e) {
+                if ((maskNow & (1 << e)) != 0) {
+                    triggerVoice(p, static_cast<double>(e - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
                 }
             }
-            return out * v.amp;""")
+            rollEndAt[p] = step + (len > 0 ? len : 1);
+        }""")
 
-c("""        v.pos += step;
+a("""                val cover = IntArray(16) { -1 }
+                for (s0 in 0 until 16) {
+                    if (row[s0] == enc) {
+                        val L = rowLen[s0]
+                        for (s in s0 until minOf(16, s0 + L)) {
+                            if (cover[s] == -1) cover[s] = s0
+                        }
+                    }
+                }""", """                val cover = IntArray(16) { -1 }
+                for (s0 in 0 until 16) {
+                    if ((row[s0] and (1 shl enc)) != 0) {
+                        val L = rowLen[s0]
+                        for (s in s0 until minOf(16, s0 + L)) {
+                            if (cover[s] == -1) cover[s] = s0
+                        }
+                    }
+                }""")
 
-        if (v.loopEnabled && v.loopEnd > v.loopStart + 1.0 && v.pos >= v.loopEnd) {
-            v.pos = v.loopStart;
-        }
+a("""                        Text(
+                            if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
+                            color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
+                        )""", """                        Text(
+                            if (pc == 0) "C${(60 + pitchOff) / 12 - 1}" else "",
+                            color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
+                        )""")
 
-        return out * v.amp;""", """        v.pos += step;
+a("""                        onToggleRollCell = { pad, step, enc ->
+                            val row = rollBanks[bank][pad]
+                            val rowLen = rollLenBanks[bank][pad]
 
-        if (v.pos >= v.loopEnd) {
-            if (v.loopEnabled) {
-                v.pos = v.loopStart;
-            } else {
-                v.amp = 0.0;
-                return 0.0;
-            }
-        }
+                            var coverStart = -1
+                            if (row[step] == enc) {
+                                coverStart = step
+                            } else {
+                                for (s0 in 0 until step) {
+                                    if (row[s0] == enc && step < s0 + rowLen[s0]) {
+                                        coverStart = s0
+                                        break
+                                    }
+                                }
+                            }
 
-        return out * v.amp;""")
+                            if (coverStart >= 0) {
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
+                                )
+                                rollLenBanks = rollLenBanks.set2(
+                                    bank, pad,
+                                    rollLenBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
+                                )
+                                nativeSetRoll(pad, coverStart, 0, 1)
+                            } else {
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = enc }
+                                )
+                                rollLenBanks = rollLenBanks.set2(
+                                    bank, pad,
+                                    rollLenBanks[bank][pad].toMutableList().also { it[step] = noteLen }
+                                )
+                                nativeSetRoll(pad, step, enc, noteLen)
+                            }
+                        },""", """                        onToggleRollCell = { pad, step, enc ->
+                            val cur = rollBanks[bank][pad][step]
+                            val bit = 1 shl enc
+                            if ((cur and bit) != 0) {
+                                val nm = cur and bit.inv()
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = nm }
+                                )
+                                if (nm == 0) {
+                                    rollLenBanks = rollLenBanks.set2(
+                                        bank, pad,
+                                        rollLenBanks[bank][pad].toMutableList().also { it[step] = 0 }
+                                    )
+                                    nativeSetRoll(pad, step, 0, 1)
+                                } else {
+                                    nativeSetRoll(pad, step, nm, rollLenBanks[bank][pad][step])
+                                }
+                            } else {
+                                val nm = cur or bit
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = nm }
+                                )
+                                if (cur == 0) {
+                                    rollLenBanks = rollLenBanks.set2(
+                                        bank, pad,
+                                        rollLenBanks[bank][pad].toMutableList().also { it[step] = noteLen }
+                                    )
+                                }
+                                nativeSetRoll(pad, step, nm, if (cur == 0) noteLen else rollLenBanks[bank][pad][step])
+                            }
+                        },""")
 
-c("""    if (gateMode.load(std::memory_order_relaxed) || loopHeld || sampleHeld) {
-        voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
-    }""", """    if (gateMode.load(std::memory_order_relaxed)) {
-        voices[padIndex].gateClosed.store(true, std::memory_order_relaxed);
-    }""")
+a("""                                .pointerInput(start, isNote, isEnd, rowLen.getOrElse(start) { 0 }) {
+                                    var buf = 0f
+                                    if (!isNote) {
+                                        detectTapGestures(onTap = { onToggleRollCell(selectedPad, step, enc) })
+                                    } else if (isEnd) {
+                                        detectDragGestures { change, drag ->
+                                            change.consume()
+                                            buf += drag.x / size.width.toFloat()
+                                            val whole = Math.round(buf).toInt()
+                                            if (whole != 0) {
+                                                onResizeDelta(selectedPad, start, whole)
+                                                buf -= whole.toFloat()
+                                            }
+                                        }
+                                    } else {
+                                        detectDragGestures { change, drag ->
+                                            change.consume()
+                                            onVel(selectedPad, start, -dySafe(drag.y))
+                                        }
+                                    }
+                                }
+                                .pointerInput(start, isNote) {
+                                    if (isNote) {
+                                        detectTapGestures(
+                                            onTap = { onAudition(selectedPad, pitchOff) },
+                                            onLongPress = { onDeleteRoll(selectedPad, start) }
+                                        )
+                                    }
+                                }""", """                                .pointerInput(start, isNote, isEnd, rowLen.getOrElse(start) { 0 }) {
+                                    var buf = 0f
+                                    if (!isNote) {
+                                        detectTapGestures(onTap = { onToggleRollCell(selectedPad, step, enc) })
+                                    } else if (isEnd) {
+                                        detectDragGestures { change, drag ->
+                                            change.consume()
+                                            buf += drag.x / size.width.toFloat()
+                                            val whole = Math.round(buf).toInt()
+                                            if (whole != 0) {
+                                                onResizeDelta(selectedPad, start, whole)
+                                                buf -= whole.toFloat()
+                                            }
+                                        }
+                                    } else {
+                                        detectDragGestures { change, drag ->
+                                            change.consume()
+                                            onVel(selectedPad, start, -dySafe(drag.y))
+                                        }
+                                    }
+                                }
+                                .pointerInput(start, isNote) {
+                                    if (isNote) {
+                                        detectTapGestures(
+                                            onTap = { onToggleRollCell(selectedPad, start, enc) },
+                                            onLongPress = { onDeleteRoll(selectedPad, start) }
+                                        )
+                                    }
+                                }""")
+
+a("""                                } else {
+                                    detectDragGestures(
+                                        onDragEnd = { }
+                                    ) { change, drag ->
+                                        change.consume()
+                                        onVel(pad, step, -drag.y / 2f)
+                                    }
+                                }""", """                                } else {
+                                    var moved = false
+                                    detectDragGestures(
+                                        onDragStart = { moved = false },
+                                        onDragEnd = { if (!moved) onToggleStep(pad, step) }
+                                    ) { change, drag ->
+                                        change.consume()
+                                        moved = true
+                                        onVel(pad, step, -drag.y / 2f)
+                                    }
+                                }""")
 
 def main():
     for path, old, new in P:
