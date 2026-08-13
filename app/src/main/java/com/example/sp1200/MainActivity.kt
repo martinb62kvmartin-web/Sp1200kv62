@@ -2686,6 +2686,7 @@ fun RollView(
                 val row = roll[selectedPad]
                 val rowLen = rollLens[selectedPad]
                 val velRow = vels[selectedPad]
+                val noteColor = C_PINK
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
@@ -2765,7 +2766,7 @@ fun RollView(
                                     val x1 = (s0 + lenF) * cellW
                                     val vel = velRow[s0]
                                     drawRoundRect(
-                                        color = C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)),
+                                        color = noteColor.copy(alpha = (0.3f + 0.7f * vel / 150f)),
                                         topLeft = Offset(x0, 1f),
                                         size = Size((x1 - x0).coerceAtLeast(2f), size.height - 2f),
                                         cornerRadius = CornerRadius(4f)
