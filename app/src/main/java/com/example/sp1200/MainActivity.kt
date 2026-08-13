@@ -1368,41 +1368,36 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onToggleRollCell = { pad, step, enc ->
-                            val row = rollBanks[bank][pad]
-                            val rowLen = rollLenBanks[bank][pad]
-
-                            var coverStart = -1
-                            if (row[step] == enc) {
-                                coverStart = step
-                            } else {
-                                for (s0 in 0 until step) {
-                                    if (row[s0] == enc && step < s0 + rowLen[s0]) {
-                                        coverStart = s0
-                                        break
-                                    }
+                            val cur = rollBanks[bank][pad][step]
+                            val bit = 1 shl enc
+                            if ((cur and bit) != 0) {
+                                val nm = cur and bit.inv()
+                                rollBanks = rollBanks.set2(
+                                    bank, pad,
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = nm }
+                                )
+                                if (nm == 0) {
+                                    rollLenBanks = rollLenBanks.set2(
+                                        bank, pad,
+                                        rollLenBanks[bank][pad].toMutableList().also { it[step] = 0 }
+                                    )
+                                    nativeSetRoll(pad, step, 0, 1)
+                                } else {
+                                    nativeSetRoll(pad, step, nm, rollLenBanks[bank][pad][step])
                                 }
-                            }
-
-                            if (coverStart >= 0) {
-                                rollBanks = rollBanks.set2(
-                                    bank, pad,
-                                    rollBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
-                                )
-                                rollLenBanks = rollLenBanks.set2(
-                                    bank, pad,
-                                    rollLenBanks[bank][pad].toMutableList().also { it[coverStart] = 0 }
-                                )
-                                nativeSetRoll(pad, coverStart, 0, 1)
                             } else {
+                                val nm = cur or bit
                                 rollBanks = rollBanks.set2(
                                     bank, pad,
-                                    rollBanks[bank][pad].toMutableList().also { it[step] = enc }
+                                    rollBanks[bank][pad].toMutableList().also { it[step] = nm }
                                 )
-                                rollLenBanks = rollLenBanks.set2(
-                                    bank, pad,
-                                    rollLenBanks[bank][pad].toMutableList().also { it[step] = noteLen }
-                                )
-                                nativeSetRoll(pad, step, enc, noteLen)
+                                if (cur == 0) {
+                                    rollLenBanks = rollLenBanks.set2(
+                                        bank, pad,
+                                        rollLenBanks[bank][pad].toMutableList().also { it[step] = noteLen }
+                                    )
+                                }
+                                nativeSetRoll(pad, step, nm, if (cur == 0) noteLen else rollLenBanks[bank][pad][step])
                             }
                         },
                         onAudition = { pad, semi -> auditionPitch(pad, semi) },
@@ -2586,10 +2581,13 @@ fun SequencerGrid(
                                 if (!on) {
                                     detectTapGestures(onTap = { onToggleStep(pad, step) })
                                 } else {
+                                    var moved = false
                                     detectDragGestures(
-                                        onDragEnd = { }
+                                        onDragStart = { moved = false },
+                                        onDragEnd = { if (!moved) onToggleStep(pad, step) }
                                     ) { change, drag ->
                                         change.consume()
+                                        moved = true
                                         onVel(pad, step, -drag.y / 2f)
                                     }
                                 }
@@ -2665,7 +2663,7 @@ fun RollView(
                 val rowLen = rollLens[selectedPad]
                 val cover = IntArray(16) { -1 }
                 for (s0 in 0 until 16) {
-                    if (row[s0] == enc) {
+                    if ((row[s0] and (1 shl enc)) != 0) {
                         val L = rowLen[s0]
                         for (s in s0 until minOf(16, s0 + L)) {
                             if (cover[s] == -1) cover[s] = s0
@@ -2687,7 +2685,7 @@ fun RollView(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            if (pitchOff >= 0) "+$pitchOff" else "$pitchOff",
+                            if (pc == 0) "C${(60 + pitchOff) / 12 - 1}" else "",
                             color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
                         )
                     }
@@ -2732,7 +2730,7 @@ fun RollView(
                                 .pointerInput(start, isNote) {
                                     if (isNote) {
                                         detectTapGestures(
-                                            onTap = { onAudition(selectedPad, pitchOff) },
+                                            onTap = { onToggleRollCell(selectedPad, start, enc) },
                                             onLongPress = { onDeleteRoll(selectedPad, start) }
                                         )
                                     }

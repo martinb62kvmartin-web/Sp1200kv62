@@ -938,10 +938,14 @@ void AudioEngine::fireStep(int step) {
             triggerVoice(p, 0.0, rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
         }
 
-        const int rp = rollPitch[b][p][step].load(std::memory_order_relaxed);
-        if (rp != 0) {
+        const int maskNow = rollPitch[b][p][step].load(std::memory_order_relaxed);
+        if (maskNow != 0) {
             const int len = rollLen[b][p][step].load(std::memory_order_relaxed);
-            triggerVoice(p, static_cast<double>(rp - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
+            for (int e = 1; e <= 25; ++e) {
+                if ((maskNow & (1 << e)) != 0) {
+                    triggerVoice(p, static_cast<double>(e - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
+                }
+            }
             rollEndAt[p] = step + (len > 0 ? len : 1);
         }
     }
