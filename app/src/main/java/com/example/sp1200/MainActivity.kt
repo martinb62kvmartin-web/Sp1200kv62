@@ -2654,7 +2654,7 @@ fun RollView(
         }
         LazyColumn(
             modifier = Modifier.fillMaxSize().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            verticalArrangement = Arrangement.spacedBy(1.dp)
         ) {
             items(25) { r ->
                 val pitchOff = 12 - r
@@ -2674,7 +2674,7 @@ fun RollView(
                 val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(1.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
@@ -2696,13 +2696,14 @@ fun RollView(
                         val isEnd = isNote && start + rowLen[start] - 1 == step
                         val vel = if (isNote) vels[selectedPad][start] else 100
                         val bg = when {
-                            playing && step == playhead -> Color(0x33FFFFFF)
-                            step % 4 == 0 -> Color(0x14FFFFFF)
-                            else -> Color(0x00000000)
+                            playing && step == playhead -> Color(0x44FFFFFF)
+                            step % 4 == 0 -> Color(0xFF24303B)
+                            r % 2 == 0 -> Color(0xFF1B232C)
+                            else -> Color(0xFF161D25)
                         }
                         Box(
                             modifier = Modifier.weight(1f).height(18.dp)
-                                .clip(RoundedCornerShape(4.dp))
+                                .clip(RoundedCornerShape(2.dp))
                                 .background(
                                     if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
                                 )
