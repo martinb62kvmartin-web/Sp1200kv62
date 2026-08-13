@@ -6,25 +6,7 @@ P = []
 def a(old, new):
     P.append(("app/src/main/java/com/example/sp1200/MainActivity.kt", old, new))
 
-a("""    vels: List<List<Int>>,
-    playhead: Int,
-    playing: Boolean
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {""", """    vels: List<List<Int>>,
-    playhead: Int,
-    playing: Boolean
-) {
-    var snapRoll by remember { mutableStateOf(true) }
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {""")
-
-a("""    var colorEl by remember { mutableStateOf(-1) }
-    var snapRoll by remember { mutableStateOf(true) }""", """    var colorEl by remember { mutableStateOf(-1) }""")
+a("""                                .pointerInput(start, isNote, isEnd, rowLen.getOrElse(start) { 0 }) {""", """                                .pointerInput(start, isNote, isEnd, snapRoll, rowLen.getOrElse(start) { 0 }) {""")
 
 def main():
     for path, old, new in P:
