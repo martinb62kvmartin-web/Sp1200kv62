@@ -2674,7 +2674,7 @@ fun RollView(
                 val blackKey = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(1.dp),
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(
@@ -2703,7 +2703,17 @@ fun RollView(
                         }
                         Box(
                             modifier = Modifier.weight(1f).height(18.dp)
-                                .clip(RoundedCornerShape(2.dp))
+                                .then(
+                                    if (isNote) Modifier else Modifier.padding(horizontal = 0.5.dp)
+                                )
+                                .clip(
+                                    RoundedCornerShape(
+                                        topStart = if (isStart) 4.dp else 0.dp,
+                                        bottomStart = if (isStart) 4.dp else 0.dp,
+                                        topEnd = if (isEnd) 4.dp else 0.dp,
+                                        bottomEnd = if (isEnd) 4.dp else 0.dp
+                                    )
+                                )
                                 .background(
                                     if (isNote) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else bg
                                 )
