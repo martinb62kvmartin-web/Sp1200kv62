@@ -83,6 +83,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import android.graphics.BitmapFactory
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -134,6 +135,8 @@ const val ROLL_PITCHES = 25
 
 data class RollPoint(val step: Int, val pitch: Int)
 data class RollNote(val step: Int, val pitch: Int, val len: Int, val velocity: Int)
+
+enum class RollTool { DRAW, SELECT, ERASE, VELOCITY, RESIZE }
 
 private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
     return this.toMutableList().also { outer ->
@@ -2850,6 +2853,7 @@ fun RollView(
     val currentRow = roll[selectedPad]
     val currentLens = rollLens[selectedPad]
     val currentVels = vels[selectedPad]
+    val noteColor = C_PINK
     val noteCount = currentRow.sumOf { Integer.bitCount(it) }
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -2946,8 +2950,11 @@ fun RollView(
                             drawRect(if (strong) Color(0xFF314452) else Color(0xFF1E2B34), Offset(step * cellW, 0f), Size(cellW - 1f, size.height))
                             if (step % 4 == 0) drawLine(Color(0xFF9BB7C4), Offset(step * cellW + 2f, 4f), Offset(step * cellW + 2f, size.height - 4f), 1f)
                         }
-                        for (step in 0 until ROLL_STEPS step 4) {
-                            drawContext.canvas.nativeCanvas.drawText("${step / 4 + 1}", step * cellW + 4f, 15f, android.graphics.Paint().apply { color = android.graphics.Color.LTGRAY; textSize = 10f })
+                        drawIntoCanvas { canvas ->
+                            val paint = android.graphics.Paint().apply { color = android.graphics.Color.LTGRAY; textSize = 10f }
+                            for (step in 0 until ROLL_STEPS step 4) {
+                                canvas.nativeCanvas.drawText("${step / 4 + 1}", step * cellW + 4f, 15f, paint)
+                            }
                         }
                     }
                     for (pitch in (ROLL_PITCHES - 1) downTo 0) {
@@ -3037,7 +3044,7 @@ fun RollView(
                                     val x1 = (step + len).coerceAtMost(ROLL_STEPS.toFloat()) * cellW
                                     val selected = selectedNotes.contains(RollPoint(step, pitch))
                                     val alpha = (0.25f + 0.75f * currentVels[step] / 150f).coerceIn(0.25f, 1f)
-                                    drawRoundRect(color = if (selected) Color(0xFFFBBF24) else C_PINK.copy(alpha = alpha), topLeft = Offset(x0 + 1f, 2f), size = Size((x1 - x0 - 2f).coerceAtLeast(3f), size.height - 4f), cornerRadius = CornerRadius(4f))
+                                    drawRoundRect(color = if (selected) Color(0xFFFBBF24) else noteColor.copy(alpha = alpha), topLeft = Offset(x0 + 1f, 2f), size = Size((x1 - x0 - 2f).coerceAtLeast(3f), size.height - 4f), cornerRadius = CornerRadius(4f))
                                     drawRect(Color.White, Offset(x0 + 1f, 2f), Size(2f, size.height - 4f))
                                     if (x1 - x0 > 20f) drawRect(Color(0xAAFFFFFF), Offset(x1 - 3f, 2f), Size(2f, size.height - 4f))
                                 }
