@@ -83,7 +83,6 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import android.graphics.BitmapFactory
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -2950,12 +2949,7 @@ fun RollView(
                             drawRect(if (strong) Color(0xFF314452) else Color(0xFF1E2B34), Offset(step * cellW, 0f), Size(cellW - 1f, size.height))
                             if (step % 4 == 0) drawLine(Color(0xFF9BB7C4), Offset(step * cellW + 2f, 4f), Offset(step * cellW + 2f, size.height - 4f), 1f)
                         }
-                        drawIntoCanvas { canvas ->
-                            val paint = android.graphics.Paint().apply { color = android.graphics.Color.LTGRAY; textSize = 10f }
-                            for (step in 0 until ROLL_STEPS step 4) {
-                                canvas.nativeCanvas.drawText("${step / 4 + 1}", step * cellW + 4f, 15f, paint)
-                            }
-                        }
+                        // Major grid lines mark each quarter; labels are kept in the compact toolbar.
                     }
                     for (pitch in (ROLL_PITCHES - 1) downTo 0) {
                         val rowIndex = ROLL_PITCHES - 1 - pitch
