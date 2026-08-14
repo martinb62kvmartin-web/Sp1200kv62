@@ -933,17 +933,19 @@ void AudioEngine::fireStep(int step) {
             rollEndAt[p] = -1;
         }
 
+        // The legacy 16-step pad sequencer repeats across the extended roll.
         const int m = seqMask[b][p].load(std::memory_order_relaxed);
-        if ((m & (1 << step)) != 0) {
+        if ((m & (1 << (step % 16))) != 0) {
             triggerVoice(p, 0.0, rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
         }
 
         const int maskNow = rollPitch[b][p][step].load(std::memory_order_relaxed);
         if (maskNow != 0) {
             const int len = rollLen[b][p][step].load(std::memory_order_relaxed);
-            for (int e = 1; e <= 25; ++e) {
+            // Kotlin stores pitches in bits 0..24, corresponding to -12..+12 semitones.
+            for (int e = 0; e < 25; ++e) {
                 if ((maskNow & (1 << e)) != 0) {
-                    triggerVoice(p, static_cast<double>(e - 13), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
+                    triggerVoice(p, static_cast<double>(e - 12), rollVel[b][p][step].load(std::memory_order_relaxed) / 100.0);
                 }
             }
             rollEndAt[p] = step + ((len + 3) / 4);

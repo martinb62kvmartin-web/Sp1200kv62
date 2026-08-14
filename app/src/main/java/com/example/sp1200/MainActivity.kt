@@ -51,6 +51,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -127,6 +128,12 @@ val PALETTE = listOf(
     Color(0xFF38BDF8), Color(0xFFC084FC), Color(0xFFF472B6), Color(0xFF101C1F),
     Color(0xFFFFFFFF), Color(0xFF000000), Color(0xFF7FA6A3), Color(0xFFF0A45C)
 )
+
+const val ROLL_STEPS = 64
+const val ROLL_PITCHES = 25
+
+data class RollPoint(val step: Int, val pitch: Int)
+data class RollNote(val step: Int, val pitch: Int, val len: Int, val velocity: Int)
 
 private fun <T> List<List<T>>.set2(a: Int, b: Int, value: T): List<List<T>> {
     return this.toMutableList().also { outer ->
@@ -227,9 +234,9 @@ class MainActivity : ComponentActivity() {
     private var bpm by mutableStateOf(90f)
     private var swing by mutableStateOf(0f)
     private var patternBanks by mutableStateOf(List(4) { List(16) { 0 } })
-    private var rollBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
-    private var rollLenBanks by mutableStateOf(List(4) { List(16) { List(16) { 0 } } })
-    private var velBanks by mutableStateOf(List(4) { List(16) { List(16) { 100 } } })
+    private var rollBanks by mutableStateOf(List(4) { List(16) { List(ROLL_STEPS) { 0 } } })
+    private var rollLenBanks by mutableStateOf(List(4) { List(16) { List(ROLL_STEPS) { 0 } } })
+    private var velBanks by mutableStateOf(List(4) { List(16) { List(ROLL_STEPS) { 100 } } })
     private var noteLen by mutableStateOf(1)
     private var mutes by mutableStateOf(List(16) { false })
     private var solos by mutableStateOf(List(16) { false })
@@ -259,6 +266,59 @@ class MainActivity : ComponentActivity() {
 
     private var selectedPad by mutableStateOf(0)
     private var peaks by mutableStateOf(FloatArray(0))
+
+    private data class RollSnapshot(
+        val roll: List<List<List<Int>>>,
+        val lens: List<List<List<Int>>>,
+        val velocities: List<List<List<Int>>>
+    )
+
+    private val rollUndo = java.util.ArrayDeque<RollSnapshot>()
+    private val rollRedo = java.util.ArrayDeque<RollSnapshot>()
+
+    private fun copyRollState() = RollSnapshot(
+        rollBanks.map { rows -> rows.map { it.toList() } },
+        rollLenBanks.map { rows -> rows.map { it.toList() } },
+        velBanks.map { rows -> rows.map { it.toList() } }
+    )
+
+    private fun recordRollEdit() {
+        rollUndo.addLast(copyRollState())
+        while (rollUndo.size > 64) rollUndo.removeFirst()
+        rollRedo.clear()
+    }
+
+    private fun syncRollBankToNative(targetBank: Int = bank) {
+        nativeSetBank(targetBank)
+        for (pad in 0 until 16) {
+            for (step in 0 until ROLL_STEPS) {
+                nativeSetRoll(pad, step, rollBanks[targetBank][pad][step], rollLenBanks[targetBank][pad][step])
+                nativeSetRollVel(pad, step, velBanks[targetBank][pad][step])
+            }
+        }
+        nativeSetBank(bank)
+    }
+
+    private fun undoRollEdit() {
+        if (rollUndo.isEmpty()) return
+        rollRedo.addLast(copyRollState())
+        val snapshot = rollUndo.removeLast()
+        rollBanks = snapshot.roll
+        rollLenBanks = snapshot.lens
+        velBanks = snapshot.velocities
+        syncRollBankToNative()
+    }
+
+    private fun redoRollEdit() {
+        if (rollRedo.isEmpty()) return
+        rollUndo.addLast(copyRollState())
+        val snapshot = rollRedo.removeLast()
+        rollBanks = snapshot.roll
+        rollLenBanks = snapshot.lens
+        velBanks = snapshot.velocities
+        syncRollBankToNative()
+    }
+
     private var loopStartBanks by mutableStateOf(List(4) { List(16) { 0f } })
     private var loopEndBanks by mutableStateOf(List(4) { List(16) { 100f } })
     private var loopOnBanks by mutableStateOf(List(4) { List(16) { false } })
@@ -839,6 +899,7 @@ class MainActivity : ComponentActivity() {
             root.put("banks", banksArr)
 
             root.put("lenscale", 4)
+            root.put("rollsteps", ROLL_STEPS)
 
             val thArr = JSONArray()
             for (i in 0 until 5) {
@@ -917,7 +978,7 @@ class MainActivity : ComponentActivity() {
                     val rows = rollBanks[b].toMutableList()
                     for (p in 0 until minOf(16, ra.length())) {
                         val st = ra.optJSONArray(p) ?: continue
-                        rows[p] = (0 until 16).map { st.optInt(it, 0) }
+                        rows[p] = (0 until ROLL_STEPS).map { idx -> st.optInt(idx, 0) }
                     }
                     newRolls[b] = rows
                 }
@@ -926,7 +987,7 @@ class MainActivity : ComponentActivity() {
                     val rows = rollLenBanks[b].toMutableList()
                     for (p in 0 until minOf(16, ra.length())) {
                         val st = ra.optJSONArray(p) ?: continue
-                        rows[p] = (0 until 16).map { st.optInt(it, 0) }
+                        rows[p] = (0 until ROLL_STEPS).map { idx -> st.optInt(idx, 0) }
                     }
                     newRollLens[b] = rows
                 }
@@ -935,7 +996,7 @@ class MainActivity : ComponentActivity() {
                     val rows = velBanks[b].toMutableList()
                     for (p in 0 until minOf(16, va2.length())) {
                         val st = va2.optJSONArray(p) ?: continue
-                        rows[p] = (0 until 16).map { st.optInt(it, 100) }
+                        rows[p] = (0 until ROLL_STEPS).map { idx -> st.optInt(idx, 100) }
                     }
                     newVels[b] = rows
                 }
@@ -1036,7 +1097,7 @@ class MainActivity : ComponentActivity() {
             nativeSetBank(b)
             for (p in 0 until 16) {
                 nativeSeqSetMask(p, patternBanks[b][p])
-                for (st in 0 until 16) {
+                for (st in 0 until ROLL_STEPS) {
                     nativeSetRoll(p, st, rollBanks[b][p][st], rollLenBanks[b][p][st])
                     nativeSetRollVel(p, st, velBanks[b][p][st])
                 }
@@ -1311,38 +1372,141 @@ class MainActivity : ComponentActivity() {
                         pattern = patternBanks[bank],
                         vels = velBanks[bank],
                         onVel = { pad, st, d ->
-                            val cur = velBanks[bank][pad][st]
-                            val next = (cur + d.toInt()).coerceIn(10, 150)
-                            if (next != cur) {
-                                velBanks = velBanks.set2(
-                                    bank, pad,
-                                    velBanks[bank][pad].toMutableList().also { it[st] = next }
-                                )
-                                nativeSetRollVel(pad, st, next)
+                            if (st in 0 until ROLL_STEPS) {
+                                val cur = velBanks[bank][pad][st]
+                                val next = (cur + d.toInt()).coerceIn(10, 150)
+                                if (next != cur) {
+                                    recordRollEdit()
+                                    velBanks = velBanks.set2(bank, pad, velBanks[bank][pad].toMutableList().also { it[st] = next })
+                                    nativeSetRollVel(pad, st, next)
+                                }
                             }
                         },
                         onResizeDelta = { pad, st, d ->
-                            val cur = rollLenBanks[bank][pad][st]
-                            val next = (cur + d).coerceIn(1, (16 - st) * 4)
-                            if (next != cur) {
-                                rollLenBanks = rollLenBanks.set2(
-                                    bank, pad,
-                                    rollLenBanks[bank][pad].toMutableList().also { it[st] = next }
-                                )
-                                nativeSetRoll(pad, st, rollBanks[bank][pad][st], next)
+                            if (st in 0 until ROLL_STEPS) {
+                                val cur = rollLenBanks[bank][pad][st]
+                                val next = (cur + d).coerceIn(1, (ROLL_STEPS - st) * 4)
+                                if (next != cur) {
+                                    recordRollEdit()
+                                    rollLenBanks = rollLenBanks.set2(bank, pad, rollLenBanks[bank][pad].toMutableList().also { it[st] = next })
+                                    nativeSetRoll(pad, st, rollBanks[bank][pad][st], next)
+                                }
                             }
                         },
                         onDeleteRoll = { pad, st ->
-                            rollBanks = rollBanks.set2(
-                                bank, pad,
-                                rollBanks[bank][pad].toMutableList().also { it[st] = 0 }
-                            )
-                            rollLenBanks = rollLenBanks.set2(
-                                bank, pad,
-                                rollLenBanks[bank][pad].toMutableList().also { it[st] = 0 }
-                            )
-                            nativeSetRoll(pad, st, 0, 1)
+                            if (st in 0 until ROLL_STEPS) {
+                                recordRollEdit()
+                                rollBanks = rollBanks.set2(bank, pad, rollBanks[bank][pad].toMutableList().also { it[st] = 0 })
+                                rollLenBanks = rollLenBanks.set2(bank, pad, rollLenBanks[bank][pad].toMutableList().also { it[st] = 0 })
+                                nativeSetRoll(pad, st, 0, 1)
+                            }
                         },
+                        onDeleteNote = { pad, st, pitchIndex ->
+                            if (st in 0 until ROLL_STEPS && pitchIndex in 0 until ROLL_PITCHES) {
+                                val bit = 1 shl pitchIndex
+                                val cur = rollBanks[bank][pad][st]
+                                if ((cur and bit) != 0) {
+                                    recordRollEdit()
+                                    val next = cur and bit.inv()
+                                    rollBanks = rollBanks.set2(bank, pad, rollBanks[bank][pad].toMutableList().also { it[st] = next })
+                                    if (next == 0) rollLenBanks = rollLenBanks.set2(bank, pad, rollLenBanks[bank][pad].toMutableList().also { it[st] = 0 })
+                                    nativeSetRoll(pad, st, next, if (next == 0) 1 else rollLenBanks[bank][pad][st])
+                                }
+                            }
+                        },
+                        onMoveNote = { pad, fromStep, fromPitch, toStep, toPitch ->
+                            if (fromStep in 0 until ROLL_STEPS && toStep in 0 until ROLL_STEPS && fromPitch in 0 until ROLL_PITCHES && toPitch in 0 until ROLL_PITCHES) {
+                                val fromBit = 1 shl fromPitch
+                                val sourceMask = rollBanks[bank][pad][fromStep]
+                                if ((sourceMask and fromBit) != 0 && (fromStep != toStep || fromPitch != toPitch)) {
+                                    recordRollEdit()
+                                    val rows = rollBanks[bank][pad].toMutableList()
+                                    val lens = rollLenBanks[bank][pad].toMutableList()
+                                    val velocities = velBanks[bank][pad].toMutableList()
+                                    val len = lens[fromStep].coerceIn(1, (ROLL_STEPS - toStep) * 4)
+                                    rows[fromStep] = rows[fromStep] and fromBit.inv()
+                                    if (rows[fromStep] == 0) lens[fromStep] = 0
+                                    val toBit = 1 shl toPitch
+                                    rows[toStep] = rows[toStep] or toBit
+                                    lens[toStep] = maxOf(lens[toStep], len)
+                                    velocities[toStep] = velocities[fromStep]
+                                    rollBanks = rollBanks.set2(bank, pad, rows)
+                                    rollLenBanks = rollLenBanks.set2(bank, pad, lens)
+                                    velBanks = velBanks.set2(bank, pad, velocities)
+                                    nativeSetRoll(pad, fromStep, rows[fromStep], if (rows[fromStep] == 0) 1 else lens[fromStep])
+                                    nativeSetRoll(pad, toStep, rows[toStep], lens[toStep])
+                                    nativeSetRollVel(pad, toStep, velocities[toStep])
+                                }
+                            }
+                        },
+                        onPasteNotes = { pad, anchorStep, anchorPitch, notes ->
+                            if (notes.isNotEmpty()) {
+                                recordRollEdit()
+                                val rows = rollBanks[bank][pad].toMutableList()
+                                val lens = rollLenBanks[bank][pad].toMutableList()
+                                val velocities = velBanks[bank][pad].toMutableList()
+                                notes.forEach { note ->
+                                    val st = (anchorStep + note.step).coerceIn(0, ROLL_STEPS - 1)
+                                    val pi = (anchorPitch + note.pitch).coerceIn(0, ROLL_PITCHES - 1)
+                                    rows[st] = rows[st] or (1 shl pi)
+                                    lens[st] = maxOf(lens[st], note.len.coerceIn(1, (ROLL_STEPS - st) * 4))
+                                    velocities[st] = note.velocity.coerceIn(10, 150)
+                                }
+                                rollBanks = rollBanks.set2(bank, pad, rows)
+                                rollLenBanks = rollLenBanks.set2(bank, pad, lens)
+                                velBanks = velBanks.set2(bank, pad, velocities)
+                                for (st in 0 until ROLL_STEPS) {
+                                    nativeSetRoll(pad, st, rows[st], lens[st])
+                                    nativeSetRollVel(pad, st, velocities[st])
+                                }
+                            }
+                        },
+                        onQuantize = { pad, points, grid ->
+                            val source = if (points.isEmpty()) {
+                                (0 until ROLL_STEPS).flatMap { st -> (0 until ROLL_PITCHES).filter { pi -> (rollBanks[bank][pad][st] and (1 shl pi)) != 0 }.map { pi -> RollPoint(st, pi) } }
+                            } else points.toList()
+                            val notes = source.mapNotNull { point ->
+                                if (point.step !in 0 until ROLL_STEPS || point.pitch !in 0 until ROLL_PITCHES || (rollBanks[bank][pad][point.step] and (1 shl point.pitch)) == 0) null else RollNote(point.step, point.pitch, rollLenBanks[bank][pad][point.step], velBanks[bank][pad][point.step])
+                            }
+                            if (notes.isNotEmpty()) {
+                                recordRollEdit()
+                                val rows = rollBanks[bank][pad].toMutableList()
+                                val lens = rollLenBanks[bank][pad].toMutableList()
+                                notes.forEach { n -> rows[n.step] = rows[n.step] and (1 shl n.pitch).inv() }
+                                for (st in 0 until ROLL_STEPS) if (rows[st] == 0) lens[st] = 0
+                                notes.forEach { n -> val target = (kotlin.math.round(n.step.toDouble() / grid) * grid).toInt().coerceIn(0, ROLL_STEPS - 1); rows[target] = rows[target] or (1 shl n.pitch); lens[target] = maxOf(lens[target], n.len.coerceIn(1, (ROLL_STEPS - target) * 4)) }
+                                rollBanks = rollBanks.set2(bank, pad, rows)
+                                rollLenBanks = rollLenBanks.set2(bank, pad, lens)
+                                for (st in 0 until ROLL_STEPS) nativeSetRoll(pad, st, rows[st], lens[st])
+                            }
+                        },
+                        onTranspose = { pad, points, delta ->
+                            val source = if (points.isEmpty()) {
+                                (0 until ROLL_STEPS).flatMap { st -> (0 until ROLL_PITCHES).filter { pi -> (rollBanks[bank][pad][st] and (1 shl pi)) != 0 }.map { pi -> RollPoint(st, pi) } }
+                            } else points.toList()
+                            val notes = source.mapNotNull { point ->
+                                if (point.step !in 0 until ROLL_STEPS || point.pitch !in 0 until ROLL_PITCHES || (rollBanks[bank][pad][point.step] and (1 shl point.pitch)) == 0) null else RollNote(point.step, point.pitch, rollLenBanks[bank][pad][point.step], velBanks[bank][pad][point.step])
+                            }
+                            if (notes.isNotEmpty()) {
+                                recordRollEdit()
+                                val rows = rollBanks[bank][pad].toMutableList()
+                                val lens = rollLenBanks[bank][pad].toMutableList()
+                                notes.forEach { n -> rows[n.step] = rows[n.step] and (1 shl n.pitch).inv() }
+                                for (st in 0 until ROLL_STEPS) if (rows[st] == 0) lens[st] = 0
+                                notes.forEach { n -> val pi = (n.pitch + delta).coerceIn(0, ROLL_PITCHES - 1); rows[n.step] = rows[n.step] or (1 shl pi); lens[n.step] = maxOf(lens[n.step], n.len) }
+                                rollBanks = rollBanks.set2(bank, pad, rows)
+                                rollLenBanks = rollLenBanks.set2(bank, pad, lens)
+                                for (st in 0 until ROLL_STEPS) nativeSetRoll(pad, st, rows[st], lens[st])
+                            }
+                        },
+                        onClearRoll = { pad ->
+                            recordRollEdit()
+                            rollBanks = rollBanks.set2(bank, pad, List(ROLL_STEPS) { 0 })
+                            rollLenBanks = rollLenBanks.set2(bank, pad, List(ROLL_STEPS) { 0 })
+                            for (st in 0 until ROLL_STEPS) nativeSetRoll(pad, st, 0, 1)
+                        },
+                        onUndo = { undoRollEdit() },
+                        onRedo = { redoRollEdit() },
                         onToggleStep = { pad, step ->
                             val newMask = patternBanks[bank][pad] xor (1 shl step)
                             patternBanks = patternBanks.set2(bank, pad, newMask)
@@ -1373,10 +1537,15 @@ class MainActivity : ComponentActivity() {
                             noteLen = when (noteLen) {
                                 1 -> 2
                                 2 -> 4
+                                4 -> 8
+                                8 -> 16
+                                16 -> 32
                                 else -> 1
                             }
                         },
                         onToggleRollCell = { pad, step, enc ->
+                            if (step in 0 until ROLL_STEPS && enc in 0 until ROLL_PITCHES) {
+                            recordRollEdit()
                             val cur = rollBanks[bank][pad][step]
                             val bit = 1 shl enc
                             if ((cur and bit) != 0) {
@@ -1407,6 +1576,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 nativeSetRoll(pad, step, nm, if (cur == 0) noteLen else rollLenBanks[bank][pad][step])
+                            }
                             }
                         },
                         onAudition = { pad, semi -> auditionPitch(pad, semi) },
@@ -1874,6 +2044,14 @@ fun Sp1200App(
     onVel: (Int, Int, Float) -> Unit,
     onResizeDelta: (Int, Int, Int) -> Unit,
     onDeleteRoll: (Int, Int) -> Unit,
+    onDeleteNote: (Int, Int, Int) -> Unit,
+    onMoveNote: (Int, Int, Int, Int, Int) -> Unit,
+    onPasteNotes: (Int, Int, Int, List<RollNote>) -> Unit,
+    onQuantize: (Int, Set<RollPoint>, Int) -> Unit,
+    onTranspose: (Int, Set<RollPoint>, Int) -> Unit,
+    onClearRoll: (Int) -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     mutes: List<Boolean>,
     onMuteToggle: (Int) -> Unit,
     solos: List<Boolean>,
@@ -2008,6 +2186,14 @@ fun Sp1200App(
                 onResizeDelta = onResizeDelta,
                 onVel = onVel,
                 onDeleteRoll = onDeleteRoll,
+                onDeleteNote = onDeleteNote,
+                onMoveNote = onMoveNote,
+                onPasteNotes = onPasteNotes,
+                onQuantize = onQuantize,
+                onTranspose = onTranspose,
+                onClearRoll = onClearRoll,
+                onUndo = onUndo,
+                onRedo = onRedo,
                 onAudition = onAudition,
                 vels = vels,
                 playhead = playhead,
@@ -2609,15 +2795,22 @@ fun fmtSteps(u: Int): String {
     return if (st == st.toInt().toFloat()) "${st.toInt()}" else "$st"
 }
 
-fun coverStartOf(row: List<Int>, rowLen: List<Int>, step: Int, enc: Int): Int {
-    if ((row[step] and (1 shl enc)) != 0) return step
-    for (s0 in 0 until step) {
-        if ((row[s0] and (1 shl enc)) != 0) {
-            val cells = (rowLen[s0] + 3) / 4
-            if (step < s0 + cells) return s0
+fun rollNoteStart(row: List<Int>, rowLen: List<Int>, step: Int, pitch: Int): Int {
+    if (step !in 0 until ROLL_STEPS || pitch !in 0 until ROLL_PITCHES) return -1
+    if ((row[step] and (1 shl pitch)) != 0) return step
+    for (candidate in 0 until step) {
+        if ((row[candidate] and (1 shl pitch)) != 0) {
+            val cells = (rowLen[candidate] + 3) / 4
+            if (step < candidate + cells) return candidate
         }
     }
     return -1
+}
+
+private fun pitchName(pitch: Int): String {
+    val midi = 48 + pitch
+    val names = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+    return "${names[midi % 12]}${midi / 12 - 1}"
 }
 
 @Composable
@@ -2633,20 +2826,34 @@ fun RollView(
     onResizeDelta: (Int, Int, Int) -> Unit,
     onVel: (Int, Int, Float) -> Unit,
     onDeleteRoll: (Int, Int) -> Unit,
+    onDeleteNote: (Int, Int, Int) -> Unit,
+    onMoveNote: (Int, Int, Int, Int, Int) -> Unit,
+    onPasteNotes: (Int, Int, Int, List<RollNote>) -> Unit,
+    onQuantize: (Int, Set<RollPoint>, Int) -> Unit,
+    onTranspose: (Int, Set<RollPoint>, Int) -> Unit,
+    onClearRoll: (Int) -> Unit,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onAudition: (Int, Int) -> Unit,
     vels: List<List<Int>>,
     playhead: Int,
     playing: Boolean
 ) {
-    var snapSel by remember { mutableStateOf(4) }
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
+    var tool by remember { mutableStateOf(RollTool.DRAW) }
+    var zoom by remember { mutableStateOf(1f) }
+    var snap by remember { mutableStateOf(1) }
+    var selectedNotes by remember { mutableStateOf(setOf<RollPoint>()) }
+    var clipboard by remember { mutableStateOf(emptyList<RollNote>()) }
+    val scrollX = rememberScrollState()
+    val scrollY = rememberScrollState()
+
+    val currentRow = roll[selectedPad]
+    val currentLens = rollLens[selectedPad]
+    val currentVels = vels[selectedPad]
+    val noteCount = currentRow.sumOf { Integer.bitCount(it) }
+
+    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             for (pad in 0 until 16) {
                 val bg = when {
                     pad == selectedPad -> C_CYAN
@@ -2654,124 +2861,185 @@ fun RollView(
                     else -> C_DARK
                 }
                 Box(
-                    modifier = Modifier.weight(1f).height(28.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(bg)
-                        .clickable { onSelectPad(pad) },
+                    modifier = Modifier.weight(1f).height(27.dp).clip(RoundedCornerShape(6.dp)).background(bg).clickable {
+                        onSelectPad(pad)
+                        selectedNotes = emptySet()
+                    },
                     contentAlignment = Alignment.Center
-                ) {
-                    Text("${pad + 1}", color = Color.White, fontSize = 8.sp)
-                }
+                ) { Text("${pad + 1}", color = Color.White, fontSize = 8.sp) }
             }
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            KBtn("LEN $noteLen", false, onNoteLenCycle, Modifier.width(70.dp).height(34.dp))
-            Text(
-                "Tap key = hear. Tap cell = note. Tap note = delete",
-                color = Color(0xFF9BB7C4), fontSize = 9.sp, maxLines = 1
-            )
+
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            KBtn("DRAW", tool == RollTool.DRAW, { tool = RollTool.DRAW }, Modifier.width(58.dp).height(30.dp))
+            KBtn("SELECT", tool == RollTool.SELECT, { tool = RollTool.SELECT }, Modifier.width(64.dp).height(30.dp))
+            KBtn("ERASE", tool == RollTool.ERASE, { tool = RollTool.ERASE }, Modifier.width(58.dp).height(30.dp))
+            KBtn("VEL", tool == RollTool.VELOCITY, { tool = RollTool.VELOCITY }, Modifier.width(48.dp).height(30.dp))
+            KBtn("RESIZE", tool == RollTool.RESIZE, { tool = RollTool.RESIZE }, Modifier.width(62.dp).height(30.dp))
+            KBtn("LEN $noteLen", false, onNoteLenCycle, Modifier.width(62.dp).height(30.dp))
+            KBtn("SNAP ${snap * 4}", false, { snap = if (snap == 1) 2 else if (snap == 2) 4 else 1 }, Modifier.width(72.dp).height(30.dp))
+            KBtn("−", false, { zoom = (zoom - 0.25f).coerceAtLeast(0.75f) }, Modifier.width(34.dp).height(30.dp))
+            KBtn("${(zoom * 100).toInt()}%", false, { zoom = 1f }, Modifier.width(58.dp).height(30.dp))
+            KBtn("+", false, { zoom = (zoom + 0.25f).coerceAtMost(2.5f) }, Modifier.width(34.dp).height(30.dp))
         }
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().weight(1f),
-            verticalArrangement = Arrangement.spacedBy(1.dp)
-        ) {
-            items(25) { r ->
-                val enc = r
-                val pitchOff = 12 - r
-                val pc = ((60 + pitchOff) % 12 + 12) % 12
-                val blackKey = pc in listOf(1, 3, 6, 8, 10)
-                val row = roll[selectedPad]
-                val rowLen = rollLens[selectedPad]
-                val velRow = vels[selectedPad]
-                val noteColor = C_PINK
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(0.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier.width(26.dp).height(18.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(if (blackKey) Color(0xFF171021) else Color(0xFFE8F4F8))
-                            .clickable { onAudition(selectedPad, pitchOff) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (pc == 0) "C${(60 + pitchOff) / 12 - 1}" else "",
-                            color = if (blackKey) Color.White else Color.Black, fontSize = 7.sp
-                        )
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            KBtn("UNDO", false, onUndo, Modifier.width(56.dp).height(28.dp))
+            KBtn("REDO", false, onRedo, Modifier.width(56.dp).height(28.dp))
+            KBtn("COPY", false, {
+                val points = if (selectedNotes.isEmpty()) {
+                    (0 until ROLL_STEPS).flatMap { st -> (0 until ROLL_PITCHES).filter { pi -> (currentRow[st] and (1 shl pi)) != 0 }.map { pi -> RollPoint(st, pi) } }
+                } else selectedNotes.toList()
+                val notes = points.mapNotNull { point ->
+                    if (point.step !in 0 until ROLL_STEPS || (currentRow[point.step] and (1 shl point.pitch)) == 0) null
+                    else RollNote(point.step, point.pitch, currentLens[point.step], currentVels[point.step])
+                }
+                if (notes.isNotEmpty()) {
+                    val baseStep = notes.minOf { it.step }
+                    val basePitch = notes.minOf { it.pitch }
+                    clipboard = notes.map { it.copy(step = it.step - baseStep, pitch = it.pitch - basePitch) }
+                }
+            }, Modifier.width(58.dp).height(28.dp))
+            KBtn("PASTE", clipboard.isNotEmpty(), {
+                val anchor = selectedNotes.minWithOrNull(compareBy<RollPoint> { it.step }.thenBy { it.pitch }) ?: RollPoint(0, 0)
+                onPasteNotes(selectedPad, anchor.step, anchor.pitch, clipboard)
+            }, Modifier.width(58.dp).height(28.dp))
+            KBtn("DEL", false, {
+                if (selectedNotes.isEmpty()) onClearRoll(selectedPad)
+                else {
+                    selectedNotes.forEach { point -> onDeleteNote(selectedPad, point.step, point.pitch) }
+                    selectedNotes = emptySet()
+                }
+            }, Modifier.width(48.dp).height(28.dp))
+            KBtn("QUANT", false, { onQuantize(selectedPad, selectedNotes, snap) }, Modifier.width(60.dp).height(28.dp))
+            KBtn("−12", false, { onTranspose(selectedPad, selectedNotes, -1) }, Modifier.width(48.dp).height(28.dp))
+            KBtn("+12", false, { onTranspose(selectedPad, selectedNotes, 1) }, Modifier.width(48.dp).height(28.dp))
+            Text("$noteCount notes", color = Color(0xFF9BB7C4), fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
+        }
+
+        Text(
+            "${tool.name}  •  Tap adds/removes  •  Select then drag to move  •  Drag note edge to resize  •  Drag vertically for velocity",
+            color = Color(0xFF9BB7C4), fontSize = 9.sp, maxLines = 1
+        )
+
+        BoxWithConstraints(modifier = Modifier.fillMaxSize().weight(1f)) {
+            val keyWidth = 46.dp
+            val timelineWidth = maxOf(900.dp, maxWidth - keyWidth) * zoom
+            Row(modifier = Modifier.fillMaxSize().verticalScroll(scrollY)) {
+                Column(modifier = Modifier.width(keyWidth)) {
+                    Box(modifier = Modifier.fillMaxWidth().height(22.dp), contentAlignment = Alignment.Center) {
+                        Text("KEY", color = Color(0xFF9BB7C4), fontSize = 8.sp)
                     }
-                    BoxWithConstraints(modifier = Modifier.weight(1f).height(18.dp)) {
-                        val w = constraints.maxWidth.toFloat()
-                        val cellW = w / 16f
+                    for (pitch in (ROLL_PITCHES - 1) downTo 0) {
+                        val black = pitchName(pitch).contains("#")
+                        Box(
+                            modifier = Modifier.fillMaxWidth().height(25.dp).clip(RoundedCornerShape(2.dp)).background(if (black) Color(0xFF171021) else Color(0xFFE8F4F8)).clickable { onAudition(selectedPad, pitch - 12) },
+                            contentAlignment = Alignment.Center
+                        ) { Text(pitchName(pitch), color = if (black) Color.White else Color.Black, fontSize = 7.sp) }
+                    }
+                }
+
+                Column(modifier = Modifier.weight(1f).horizontalScroll(scrollX)) {
+                    Canvas(modifier = Modifier.width(timelineWidth).fillMaxWidth().height(22.dp)) {
+                        val cellW = size.width / ROLL_STEPS
+                        for (step in 0 until ROLL_STEPS) {
+                            val strong = step % 16 == 0
+                            drawRect(if (strong) Color(0xFF314452) else Color(0xFF1E2B34), Offset(step * cellW, 0f), Size(cellW - 1f, size.height))
+                            if (step % 4 == 0) drawLine(Color(0xFF9BB7C4), Offset(step * cellW + 2f, 4f), Offset(step * cellW + 2f, size.height - 4f), 1f)
+                        }
+                        for (step in 0 until ROLL_STEPS step 4) {
+                            drawContext.canvas.nativeCanvas.drawText("${step / 4 + 1}", step * cellW + 4f, 15f, android.graphics.Paint().apply { color = android.graphics.Color.LTGRAY; textSize = 10f })
+                        }
+                    }
+                    for (pitch in (ROLL_PITCHES - 1) downTo 0) {
+                        val rowIndex = ROLL_PITCHES - 1 - pitch
+                        val black = pitchName(pitch).contains("#")
                         Canvas(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .pointerInput(row, rowLen, snapSel) {
-                                    detectTapGestures(
-                                        onTap = { pos ->
-                                            val stp = (pos.x / cellW).toInt().coerceIn(0, 15)
-                                            val st = coverStartOf(row, rowLen, stp, enc)
-                                            onToggleRollCell(selectedPad, if (st >= 0) st else stp, enc)
-                                        },
-                                        onLongPress = { pos ->
-                                            val stp = (pos.x / cellW).toInt().coerceIn(0, 15)
-                                            val st = coverStartOf(row, rowLen, stp, enc)
-                                            if (st >= 0) onDeleteRoll(selectedPad, st)
+                            modifier = Modifier.width(timelineWidth).height(25.dp).pointerInput(currentRow, currentLens, tool, snap) {
+                                detectTapGestures(
+                                    onTap = { pos ->
+                                        val cellW = size.width / ROLL_STEPS
+                                        val rawStep = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                        val step = ((rawStep + snap / 2) / snap * snap).coerceIn(0, ROLL_STEPS - 1)
+                                        val start = rollNoteStart(currentRow, currentLens, rawStep, pitch)
+                                        when (tool) {
+                                            RollTool.DRAW -> onToggleRollCell(selectedPad, if (start >= 0) start else step, pitch)
+                                            RollTool.ERASE -> if (start >= 0) onDeleteNote(selectedPad, start, pitch)
+                                            RollTool.SELECT, RollTool.VELOCITY, RollTool.RESIZE -> if (start >= 0) selectedNotes = if (selectedNotes.contains(RollPoint(start, pitch))) selectedNotes - RollPoint(start, pitch) else selectedNotes + RollPoint(start, pitch)
                                         }
-                                    )
-                                }
-                                .pointerInput(row, rowLen, snapSel) {
-                                    var buf = 0f
-                                    var last = 0
-                                    detectDragGestures { change, drag ->
+                                    },
+                                    onLongPress = { pos ->
+                                        val cellW = size.width / ROLL_STEPS
+                                        val step = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                        val start = rollNoteStart(currentRow, currentLens, step, pitch)
+                                        if (start >= 0) onDeleteNote(selectedPad, start, pitch)
+                                    }
+                                )
+                            }.pointerInput(currentRow, currentLens, tool, snap) {
+                                var from: RollPoint? = null
+                                var lastStep = -1
+                                detectDragGestures(
+                                    onDragStart = { pos ->
+                                        val cellW = size.width / ROLL_STEPS
+                                        val step = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                        val start = rollNoteStart(currentRow, currentLens, step, pitch)
+                                        from = if (start >= 0) RollPoint(start, pitch) else null
+                                        lastStep = step
+                                    },
+                                    onDragEnd = { from = null },
+                                    onDragCancel = { from = null },
+                                    onDrag = { change, drag ->
                                         change.consume()
-                                        val stp = (change.position.x / cellW).toInt().coerceIn(0, 15)
-                                        val st = coverStartOf(row, rowLen, stp, enc)
-                                        if (st >= 0) {
-                                            val lenF = rowLen[st] / 4f
-                                            val x1 = (st + lenF) * cellW
-                                            if (kotlin.math.abs(change.position.x - x1) < 28f || kotlin.math.abs(drag.x) >= kotlin.math.abs(drag.y)) {
-                                                buf += drag.x / cellW * 4f
-                                                val per = if (snapSel > 0) snapSel.toFloat() else 1f
-                                                val snapped = (Math.round(buf / per) * per).toInt()
-                                                val delta = snapped - last
-                                                if (delta != 0) {
-                                                    onResizeDelta(selectedPad, st, delta)
-                                                    last = snapped
+                                        val cellW = size.width / ROLL_STEPS
+                                        val step = (change.position.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                        val source = from
+                                        if (source != null && step != lastStep) {
+                                            when (tool) {
+                                                RollTool.SELECT -> {
+                                                    val delta = step - source.step
+                                                    val pitchDelta = ((-drag.y / 25f).toInt()).coerceIn(-ROLL_PITCHES, ROLL_PITCHES)
+                                                    val destination = (source.pitch + pitchDelta).coerceIn(0, ROLL_PITCHES - 1)
+                                                    val snappedStep = (source.step + delta).coerceIn(0, ROLL_STEPS - 1)
+                                                    onMoveNote(selectedPad, source.step, source.pitch, snappedStep, destination)
+                                                    selectedNotes = setOf(RollPoint(snappedStep, destination))
+                                                    from = RollPoint(snappedStep, destination)
                                                 }
-                                            } else {
-                                                onVel(selectedPad, st, -drag.y / 2f)
+                                                RollTool.RESIZE -> onResizeDelta(selectedPad, source.step, ((drag.x / cellW) * 4f).toInt())
+                                                RollTool.VELOCITY -> onVel(selectedPad, source.step, -drag.y / 2f)
+                                                else -> Unit
+                                            }
+                                            lastStep = step
+                                        } else if (source != null) {
+                                            when (tool) {
+                                                RollTool.RESIZE -> onResizeDelta(selectedPad, source.step, ((drag.x / cellW) * 4f).toInt())
+                                                RollTool.VELOCITY -> onVel(selectedPad, source.step, -drag.y / 2f)
+                                                else -> Unit
                                             }
                                         }
                                     }
-                                }
-                        ) {
-                            for (s2 in 0 until 16) {
-                                val cc = when {
-                                    playing && s2 == playhead -> Color(0x44FFFFFF)
-                                    s2 % 4 == 0 -> Color(0xFF24303B)
-                                    r % 2 == 0 -> Color(0xFF1B232C)
-                                    else -> Color(0xFF161D25)
-                                }
-                            drawRect(cc, Offset(s2 * cellW + 0.5f, 0f), Size(cellW - 1f, size.height))
+                                )
                             }
-                            for (s0 in 0 until 16) {
-                                if ((row[s0] and (1 shl enc)) != 0) {
-                                    val lenF = rowLen[s0] / 4f
-                                    val x0 = s0 * cellW
-                                    val x1 = (s0 + lenF) * cellW
-                                    val vel = velRow[s0]
-                                    drawRoundRect(
-                                        color = noteColor.copy(alpha = (0.3f + 0.7f * vel / 150f)),
-                                        topLeft = Offset(x0, 1f),
-                                        size = Size((x1 - x0).coerceAtLeast(2f), size.height - 2f),
-                                        cornerRadius = CornerRadius(4f)
-                                    )
-                                    drawRect(Color.White, Offset(x0, 1f), Size(2f, size.height - 2f))
+                        ) {
+                            val cellW = size.width / ROLL_STEPS
+                            for (step in 0 until ROLL_STEPS) {
+                                val grid = when {
+                                    playing && step == playhead -> Color(0x66FFFFFF)
+                                    step % 16 == 0 -> Color(0xFF293944)
+                                    step % 4 == 0 -> Color(0xFF23313A)
+                                    black -> Color(0xFF171F26)
+                                    else -> Color(0xFF1B252D)
+                                }
+                                drawRect(grid, Offset(step * cellW + 0.5f, 0f), Size(cellW - 1f, size.height))
+                            }
+                            for (step in 0 until ROLL_STEPS) {
+                                if ((currentRow[step] and (1 shl pitch)) != 0) {
+                                    val len = currentLens[step].coerceAtLeast(1) / 4f
+                                    val x0 = step * cellW
+                                    val x1 = (step + len).coerceAtMost(ROLL_STEPS.toFloat()) * cellW
+                                    val selected = selectedNotes.contains(RollPoint(step, pitch))
+                                    val alpha = (0.25f + 0.75f * currentVels[step] / 150f).coerceIn(0.25f, 1f)
+                                    drawRoundRect(color = if (selected) Color(0xFFFBBF24) else C_PINK.copy(alpha = alpha), topLeft = Offset(x0 + 1f, 2f), size = Size((x1 - x0 - 2f).coerceAtLeast(3f), size.height - 4f), cornerRadius = CornerRadius(4f))
+                                    drawRect(Color.White, Offset(x0 + 1f, 2f), Size(2f, size.height - 4f))
+                                    if (x1 - x0 > 20f) drawRect(Color(0xAAFFFFFF), Offset(x1 - 3f, 2f), Size(2f, size.height - 4f))
                                 }
                             }
                         }

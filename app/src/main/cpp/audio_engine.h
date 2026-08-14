@@ -89,7 +89,7 @@ public:
 
 private:
     static constexpr int kNumPads = 16;
-    static constexpr int kSteps = 16;
+    static constexpr int kSteps = 64;
     static constexpr int kBanks = 4;
 
     struct Voice {
