@@ -62,6 +62,9 @@ public:
     void setPadPan(int padIndex, float pan);
     void setMasterVol(float vol);
     void setMasterPan(float pan);
+    void setFxType(int padIndex, int slot, int type);
+    void setFxEnabled(int padIndex, int slot, bool enabled);
+    void setFxParam(int padIndex, int slot, int param, float value);
 
     std::array<float, 18> getLevels();
 
@@ -89,8 +92,33 @@ public:
 
 private:
     static constexpr int kNumPads = 16;
-    static constexpr int kSteps = 16;
+    static constexpr int kSteps = 64;
     static constexpr int kBanks = 4;
+    static constexpr int kFxSlots = 5;
+    static constexpr int kFxParams = 6;
+    static constexpr int kFxBufferSize = 32768;
+
+    struct FxSlot {
+        std::atomic<int> type{0};
+        std::atomic<bool> enabled{false};
+        std::array<std::atomic<float>, kFxParams> params{};
+
+        FxSlot() {
+            for (auto& p : params) p.store(0.5f, std::memory_order_relaxed);
+        }
+    };
+
+    struct FxRuntime {
+        std::array<float, kFxBufferSize> delay{};
+        int delayPos = 0;
+        int holdCounter = 0;
+        float held = 0.0f;
+        float low = 0.0f;
+        float high = 0.0f;
+        float reverbLow = 0.0f;
+        uint32_t rng = 0x13579BDFu;
+        std::array<float, 6> eq{};
+    };
 
     struct Voice {
         std::atomic<bool> active{false};
@@ -136,6 +164,7 @@ private:
 
     double renderVoice(Voice& voice);
     double nextNoise(Voice& voice);
+    float processFxSample(int padIndex, int slot, float input);
     void triggerVoice(int padIndex, double semiAdd, double vel);
     void fireStep(int step);
     std::shared_ptr<Sample> parseWav(const std::vector<uint8_t>& bytes);
@@ -159,6 +188,8 @@ private:
 
     std::array<std::atomic<float>, kNumPads> padVol{};
     std::array<std::atomic<float>, kNumPads> padPan{};
+    std::array<std::array<FxSlot, kFxSlots>, kNumPads> fxSlots{};
+    std::array<std::array<FxRuntime, kFxSlots>, kNumPads> fxRuntime{};
     std::atomic<float> masterVol{1.0f};
     std::atomic<float> masterPan{0.0f};
 

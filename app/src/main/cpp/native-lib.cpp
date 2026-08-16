@@ -283,6 +283,22 @@ Java_com_example_sp1200_MainActivity_nativeSetMasterPan(JNIEnv*, jobject, jfloat
     }
 }
 
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetFxType(JNIEnv*, jobject, jint padIndex, jint slot, jint type) {
+    if (engine != nullptr) engine->setFxType(static_cast<int>(padIndex), static_cast<int>(slot), static_cast<int>(type));
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetFxEnabled(JNIEnv*, jobject, jint padIndex, jint slot, jboolean enabled) {
+    if (engine != nullptr) engine->setFxEnabled(static_cast<int>(padIndex), static_cast<int>(slot), enabled == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_example_sp1200_MainActivity_nativeSetFxParam(JNIEnv*, jobject, jint padIndex, jint slot, jint param, jfloat value) {
+    if (engine != nullptr) engine->setFxParam(static_cast<int>(padIndex), static_cast<int>(slot), static_cast<int>(param), value);
+}
+
 JNIEXPORT jfloatArray JNICALL
 Java_com_example_sp1200_MainActivity_nativeGetLevels(JNIEnv* env, jobject) {
     jfloatArray result = env->NewFloatArray(18);
