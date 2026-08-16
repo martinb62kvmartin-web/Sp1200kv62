@@ -134,6 +134,31 @@ val PALETTE = listOf(
 
 const val ROLL_STEPS = 64
 const val ROLL_PITCHES = 25
+const val FX_SLOTS = 5
+const val FX_PARAM_COUNT = 6
+
+val FX_TYPE_NAMES = listOf(
+    "EMPTY", "BITCRUSH", "OTT", "COMP", "EQ6", "DRIVE", "VINYL", "TAPE", "REVERB", "DELAY"
+)
+
+data class FxSlotState(
+    val type: Int = 0,
+    val enabled: Boolean = false,
+    val params: List<Float> = List(FX_PARAM_COUNT) { 0.5f }
+)
+
+fun fxParamLabels(type: Int): List<String> = when (type) {
+    1 -> listOf("BITS", "RATE", "MIX")
+    2 -> listOf("DEPTH", "TIME", "MIX")
+    3 -> listOf("THR", "RATIO", "ATK", "REL", "MAKE", "MIX")
+    4 -> listOf("60", "120", "250", "500", "1K", "4K")
+    5 -> listOf("DRIVE", "TONE", "MIX")
+    6 -> listOf("NOISE", "WOW", "CRACK", "MIX")
+    7 -> listOf("SAT", "BASS", "HISS", "MIX")
+    8 -> listOf("ROOM", "DAMP", "MIX")
+    9 -> listOf("TIME", "FDBK", "MIX")
+    else -> emptyList()
+}
 
 data class RollPoint(val step: Int, val pitch: Int)
 data class RollNote(val step: Int, val pitch: Int, val len: Int, val velocity: Int)
@@ -201,6 +226,9 @@ class MainActivity : ComponentActivity() {
     private external fun nativeSetPadPan(padIndex: Int, pan: Float)
     private external fun nativeSetMasterVol(vol: Float)
     private external fun nativeSetMasterPan(pan: Float)
+    private external fun nativeSetFxType(padIndex: Int, slot: Int, type: Int)
+    private external fun nativeSetFxEnabled(padIndex: Int, slot: Int, enabled: Boolean)
+    private external fun nativeSetFxParam(padIndex: Int, slot: Int, param: Int, value: Float)
     private external fun nativeGetLevels(): FloatArray
     private external fun nativeSetMidiMode(mode: Int)
     private external fun nativeMidiTick()
@@ -256,6 +284,7 @@ class MainActivity : ComponentActivity() {
     private var mixAssign by mutableStateOf(List(5) { it })
     private var volBanks by mutableStateOf(List(16) { 100f })
     private var panBanks by mutableStateOf(List(16) { 50f })
+    private var fxBanks by mutableStateOf(List(16) { List(FX_SLOTS) { FxSlotState() } })
     private var masterVol by mutableStateOf(100f)
     private var masterPan by mutableStateOf(50f)
     private var exportBars by mutableStateOf(2)
@@ -833,6 +862,21 @@ class MainActivity : ComponentActivity() {
             root.put("mvol", masterVol)
             root.put("mpan", masterPan)
 
+            val fxArr = JSONArray()
+            for (p in 0 until 16) {
+                val slotsArr = JSONArray()
+                for (slot in 0 until FX_SLOTS) {
+                    val state = fxBanks[p][slot]
+                    val so = JSONObject()
+                    so.put("type", state.type)
+                    so.put("enabled", state.enabled)
+                    so.put("params", JSONArray(state.params))
+                    slotsArr.put(so)
+                }
+                fxArr.put(slotsArr)
+            }
+            root.put("fx", fxArr)
+
             val banksArr = JSONArray()
             for (b in 0 until 4) {
                 val bo = JSONObject()
@@ -945,6 +989,25 @@ class MainActivity : ComponentActivity() {
             }
             masterVol = root.optDouble("mvol", 100.0).toFloat()
             masterPan = root.optDouble("mpan", 50.0).toFloat()
+            root.optJSONArray("fx")?.let { fxArr ->
+                val loaded = fxBanks.toMutableList()
+                for (p in 0 until minOf(16, fxArr.length())) {
+                    val slotsArr = fxArr.optJSONArray(p) ?: continue
+                    val slots = loaded[p].toMutableList()
+                    for (slot in 0 until minOf(FX_SLOTS, slotsArr.length())) {
+                        val so = slotsArr.optJSONObject(slot) ?: continue
+                        val pa = so.optJSONArray("params")
+                        val params = List(FX_PARAM_COUNT) { i -> pa?.optDouble(i, 0.5)?.toFloat() ?: 0.5f }
+                        slots[slot] = FxSlotState(
+                            type = so.optInt("type", 0).coerceIn(0, FX_TYPE_NAMES.lastIndex),
+                            enabled = so.optBoolean("enabled", false),
+                            params = params
+                        )
+                    }
+                    loaded[p] = slots
+                }
+                fxBanks = loaded
+            }
             wallFx = root.optInt("wallfx", 0)
 
             root.optJSONArray("theme")?.let { ta ->
@@ -1094,6 +1157,12 @@ class MainActivity : ComponentActivity() {
             nativeSetSolo(p, solos[p])
             nativeSetPadVol(p, volBanks[p] / 100f)
             nativeSetPadPan(p, (panBanks[p] - 50f) / 50f)
+            for (slot in 0 until FX_SLOTS) {
+                val fx = fxBanks[p][slot]
+                nativeSetFxType(p, slot, fx.type)
+                nativeSetFxEnabled(p, slot, fx.enabled)
+                for (param in 0 until FX_PARAM_COUNT) nativeSetFxParam(p, slot, param, fx.params[param])
+            }
         }
         nativeSetMasterVol(masterVol / 100f)
         nativeSetMasterPan((masterPan - 50f) / 50f)
@@ -1607,6 +1676,31 @@ class MainActivity : ComponentActivity() {
                             panBanks = panBanks.toMutableList().also { it[p] = value }
                             nativeSetPadPan(p, (value - 50f) / 50f)
                         },
+                        fxBanks = fxBanks,
+                        onFxTypeChange = { pad, slot, type ->
+                            val next = FxSlotState(type = type, enabled = type != 0, params = List(FX_PARAM_COUNT) { 0.5f })
+                            fxBanks = fxBanks.toMutableList().also { pads ->
+                                pads[pad] = pads[pad].toMutableList().also { slots -> slots[slot] = next }
+                            }
+                            nativeSetFxType(pad, slot, type)
+                            nativeSetFxEnabled(pad, slot, type != 0)
+                            for (param in 0 until FX_PARAM_COUNT) nativeSetFxParam(pad, slot, param, next.params[param])
+                        },
+                        onFxEnabledChange = { pad, slot, enabled ->
+                            fxBanks = fxBanks.toMutableList().also { pads ->
+                                pads[pad] = pads[pad].toMutableList().also { slots -> slots[slot] = slots[slot].copy(enabled = enabled) }
+                            }
+                            nativeSetFxEnabled(pad, slot, enabled)
+                        },
+                        onFxParamChange = { pad, slot, param, value ->
+                            fxBanks = fxBanks.toMutableList().also { pads ->
+                                pads[pad] = pads[pad].toMutableList().also { slots ->
+                                    val old = slots[slot]
+                                    slots[slot] = old.copy(params = old.params.toMutableList().also { it[param] = value.coerceIn(0f, 1f) })
+                                }
+                            }
+                            nativeSetFxParam(pad, slot, param, value.coerceIn(0f, 1f))
+                        },
                         masterVol = masterVol,
                         onMasterVol = { value ->
                             masterVol = value
@@ -2083,6 +2177,10 @@ fun Sp1200App(
     panOf: (Int) -> Float,
     onVol: (Int, Float) -> Unit,
     onPan: (Int, Float) -> Unit,
+    fxBanks: List<List<FxSlotState>>,
+    onFxTypeChange: (Int, Int, Int) -> Unit,
+    onFxEnabledChange: (Int, Int, Boolean) -> Unit,
+    onFxParamChange: (Int, Int, Int, Float) -> Unit,
     masterVol: Float,
     onMasterVol: (Float) -> Unit,
     masterPan: Float,
@@ -2222,6 +2320,10 @@ fun Sp1200App(
                 panOf = panOf,
                 onVol = onVol,
                 onPan = onPan,
+                fxBanks = fxBanks,
+                onFxTypeChange = onFxTypeChange,
+                onFxEnabledChange = onFxEnabledChange,
+                onFxParamChange = onFxParamChange,
                 masterVol = masterVol,
                 onMasterVol = onMasterVol,
                 masterPan = masterPan,
@@ -2624,6 +2726,91 @@ fun SampleView(
     }
 }
 
+
+@Composable
+fun FxParameterControl(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit
+) {
+    Column(modifier = Modifier.width(52.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, color = Color(0xFF9BB7C4), fontSize = 7.sp, maxLines = 1)
+        Fader(value = value, range = 0f..1f, onValueChange = onValueChange, modifier = Modifier.fillMaxWidth().height(24.dp))
+        Text("${(value * 100f).toInt()}", color = Color.White, fontSize = 7.sp)
+    }
+}
+
+@Composable
+fun FxRack(
+    pad: Int,
+    slots: List<FxSlotState>,
+    onTypeChange: (Int, Int, Int) -> Unit,
+    onEnabledChange: (Int, Int, Boolean) -> Unit,
+    onParamChange: (Int, Int, Int, Float) -> Unit
+) {
+    var pickerSlot by remember { mutableStateOf<Int?>(null) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF111A20))
+            .padding(4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text("FX RACK  •  5 SLOTS", color = C_CYAN, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+        slots.forEachIndexed { slot, state ->
+            Column(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(Color(0xFF1C2931)).padding(3.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text("${slot + 1}", color = C_CYAN, fontSize = 8.sp)
+                    KBtn(
+                        if (state.type == 0) "+ ADD" else FX_TYPE_NAMES[state.type],
+                        state.type != 0,
+                        { pickerSlot = slot },
+                        Modifier.weight(1f).height(24.dp)
+                    )
+                    KBtn("ON", state.enabled && state.type != 0, {
+                        if (state.type != 0) onEnabledChange(pad, slot, !state.enabled)
+                    }, Modifier.width(34.dp).height(24.dp))
+                }
+                if (state.type != 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        fxParamLabels(state.type).forEachIndexed { param, label ->
+                            FxParameterControl(
+                                label = label,
+                                value = state.params.getOrElse(param) { 0.5f },
+                                onValueChange = { onParamChange(pad, slot, param, it) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pickerSlot?.let { slot ->
+        Dialog(onDismissRequest = { pickerSlot = null }) {
+            Column(
+                modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF241B3F)).padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text("CHANNEL ${pad + 1}  •  SLOT ${slot + 1}", color = Color.White, fontWeight = FontWeight.Bold)
+                FX_TYPE_NAMES.forEachIndexed { type, name ->
+                    KBtn(name, slots[slot].type == type, {
+                        onTypeChange(pad, slot, type)
+                        pickerSlot = null
+                    }, Modifier.fillMaxWidth().height(34.dp))
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun MixView(
     mixAssign: List<Int>,
@@ -2632,6 +2819,10 @@ fun MixView(
     panOf: (Int) -> Float,
     onVol: (Int, Float) -> Unit,
     onPan: (Int, Float) -> Unit,
+    fxBanks: List<List<FxSlotState>>,
+    onFxTypeChange: (Int, Int, Int) -> Unit,
+    onFxEnabledChange: (Int, Int, Boolean) -> Unit,
+    onFxParamChange: (Int, Int, Int, Float) -> Unit,
     masterVol: Float,
     onMasterVol: (Float) -> Unit,
     masterPan: Float,
@@ -2683,6 +2874,13 @@ fun MixView(
                 VMeter(level = lvl, modifier = Modifier.fillMaxWidth().height(200.dp))
                 Fader(value = volOf(pad), range = 0f..150f, onValueChange = { onVol(pad, it) }, modifier = Modifier.fillMaxWidth())
                 Fader(value = panOf(pad), range = 0f..100f, onValueChange = { onPan(pad, it) }, modifier = Modifier.fillMaxWidth())
+                FxRack(
+                    pad = pad,
+                    slots = fxBanks[pad],
+                    onTypeChange = onFxTypeChange,
+                    onEnabledChange = onFxEnabledChange,
+                    onParamChange = onFxParamChange
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Box(
                         modifier = Modifier.weight(1f).height(30.dp)

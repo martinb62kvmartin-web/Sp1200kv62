@@ -1,6 +1,7 @@
 #include "audio_engine.h"
 
 #include <android/log.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -384,6 +385,23 @@ void AudioEngine::setMasterVol(float vol) {
 
 void AudioEngine::setMasterPan(float pan) {
     masterPan.store(clampd(pan, -1.0f, 1.0f), std::memory_order_relaxed);
+}
+
+void AudioEngine::setFxType(int padIndex, int slot, int type) {
+    if (padIndex < 0 || padIndex >= kNumPads || slot < 0 || slot >= kFxSlots) return;
+    if (type < 0 || type > 9) type = 0;
+    fxSlots[padIndex][slot].type.store(type, std::memory_order_relaxed);
+    fxSlots[padIndex][slot].enabled.store(type != 0, std::memory_order_relaxed);
+}
+
+void AudioEngine::setFxEnabled(int padIndex, int slot, bool enabled) {
+    if (padIndex < 0 || padIndex >= kNumPads || slot < 0 || slot >= kFxSlots) return;
+    fxSlots[padIndex][slot].enabled.store(enabled, std::memory_order_relaxed);
+}
+
+void AudioEngine::setFxParam(int padIndex, int slot, int param, float value) {
+    if (padIndex < 0 || padIndex >= kNumPads || slot < 0 || slot >= kFxSlots || param < 0 || param >= kFxParams) return;
+    fxSlots[padIndex][slot].params[param].store(static_cast<float>(clampd(value, 0.0f, 1.0f)), std::memory_order_relaxed);
 }
 
 void AudioEngine::setMidiMode(int mode) {
@@ -1090,6 +1108,134 @@ double AudioEngine::renderVoice(Voice& v) {
     return out * v.amp;
 }
 
+
+float AudioEngine::processFxSample(int padIndex, int slot, float input) {
+    if (padIndex < 0 || padIndex >= kNumPads || slot < 0 || slot >= kFxSlots) return input;
+    FxSlot& fx = fxSlots[padIndex][slot];
+    if (!fx.enabled.load(std::memory_order_relaxed)) return input;
+    const int type = fx.type.load(std::memory_order_relaxed);
+    if (type <= 0) return input;
+
+    auto param = [&](int index) -> float {
+        return fx.params[index].load(std::memory_order_relaxed);
+    };
+    auto softClip = [](float x) -> float {
+        return std::tanh(x);
+    };
+    auto randomUnit = [](FxRuntime& r) -> float {
+        r.rng = r.rng * 1664525u + 1013904223u;
+        return static_cast<float>((static_cast<double>(r.rng) / 2147483648.0) - 1.0);
+    };
+
+    FxRuntime& r = fxRuntime[padIndex][slot];
+    float wet = input;
+    float mix = 0.5f;
+
+    switch (type) {
+        case 1: { // CamelCrush-style bitcrusher
+            const int bits = 4 + static_cast<int>(param(0) * 12.0f);
+            const int hold = 1 + static_cast<int>((1.0f - param(1)) * 31.0f);
+            if (r.holdCounter <= 0) {
+                const float levels = static_cast<float>(1 << bits);
+                r.held = std::round(input * levels) / levels;
+                r.holdCounter = hold;
+            } else {
+                --r.holdCounter;
+            }
+            wet = r.held;
+            mix = param(2);
+            break;
+        }
+        case 2: { // OTT-style upward/downward dynamics approximation
+            const float depth = param(0);
+            const float threshold = 0.02f + (1.0f - depth) * 0.35f;
+            const float amount = 1.0f + depth * 7.0f;
+            const float a = std::fabs(input);
+            const float compressed = a > threshold ? threshold + (a - threshold) / amount : a;
+            wet = std::copysign(compressed * amount * 0.75f, input);
+            mix = param(2);
+            break;
+        }
+        case 3: { // Classic compressor
+            const float threshold = 0.02f + param(0) * 0.75f;
+            const float ratio = 1.0f + param(1) * 19.0f;
+            const float a = std::fabs(input);
+            const float over = std::max(0.0f, a - threshold);
+            const float gain = over > 0.0f ? (threshold + over / ratio) / a : 1.0f;
+            const float makeup = 0.5f + param(4) * 1.5f;
+            wet = input * gain * makeup;
+            mix = param(5);
+            break;
+        }
+        case 4: { // Six-band EQ, broad one-pole bands
+            static constexpr float alpha[6] = {0.004f, 0.008f, 0.016f, 0.032f, 0.064f, 0.14f};
+            static constexpr float weight[6] = {0.22f, 0.18f, 0.16f, 0.15f, 0.14f, 0.15f};
+            wet = input;
+            for (int i = 0; i < 6; ++i) {
+                r.eq[i] += alpha[i] * (input - r.eq[i]);
+                const float gain = (param(i) - 0.5f) * 2.0f;
+                wet += r.eq[i] * gain * weight[i] * 2.5f;
+            }
+            mix = 1.0f;
+            break;
+        }
+        case 5: { // Drive
+            const float drive = 1.0f + param(0) * 19.0f;
+            const float tone = 0.02f + param(1) * 0.35f;
+            r.low += tone * (input - r.low);
+            wet = softClip((input * drive) * 1.35f) * (0.65f + 0.35f * r.low);
+            mix = param(2);
+            break;
+        }
+        case 6: { // Vinyl
+            const float noise = randomUnit(r) * param(0) * 0.045f;
+            const float wow = std::sin(static_cast<float>(totalFrames) * 0.00019f) * param(1) * 0.02f;
+            const float crack = (randomUnit(r) > 0.997f ? randomUnit(r) * param(2) * 0.28f : 0.0f);
+            wet = input + noise + crack + input * wow;
+            mix = param(3);
+            break;
+        }
+        case 7: { // Tape
+            const float sat = 1.0f + param(0) * 5.0f;
+            const float bass = 0.03f + param(1) * 0.2f;
+            r.low += bass * (input - r.low);
+            const float hiss = randomUnit(r) * param(2) * 0.012f;
+            wet = softClip(input * sat) * 0.82f + r.low * 0.18f + hiss;
+            mix = param(3);
+            break;
+        }
+        case 8: { // Reverb
+            const int p1 = (r.delayPos + 1103) & (kFxBufferSize - 1);
+            const int p2 = (r.delayPos + 1553) & (kFxBufferSize - 1);
+            const int p3 = (r.delayPos + 2203) & (kFxBufferSize - 1);
+            const float late = (r.delay[p1] + r.delay[p2] + r.delay[p3]) * 0.3333f;
+            const float damp = 0.02f + param(1) * 0.25f;
+            r.reverbLow += damp * (late - r.reverbLow);
+            r.delay[r.delayPos] = input + r.reverbLow * (0.45f + param(0) * 0.35f);
+            r.delayPos = (r.delayPos + 1) & (kFxBufferSize - 1);
+            wet = input * 0.72f + r.reverbLow;
+            mix = param(2);
+            break;
+        }
+        case 9: { // Delay
+            const int delaySamples = 40 + static_cast<int>(param(0) * (kFxBufferSize - 80));
+            const int read = (r.delayPos - delaySamples) & (kFxBufferSize - 1);
+            const float echo = r.delay[read];
+            const float feedback = param(1) * 0.85f;
+            r.delay[r.delayPos] = input + echo * feedback;
+            r.delayPos = (r.delayPos + 1) & (kFxBufferSize - 1);
+            wet = input * 0.85f + echo;
+            mix = param(2);
+            break;
+        }
+        default:
+            return input;
+    }
+
+    mix = clampd(mix, 0.0f, 1.0f);
+    return input * (1.0f - mix) + wet * mix;
+}
+
 oboe::DataCallbackResult AudioEngine::onAudioReady(
         oboe::AudioStream* stream,
         void* audioData,
@@ -1322,7 +1468,10 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                 const float pan = padPan[pIdx].load(std::memory_order_relaxed);
                 const float gl = vol * (pan < 0.0f ? 1.0f : 1.0f - pan);
                 const float gr = vol * (pan > 0.0f ? 1.0f : 1.0f + pan);
-                const float m = static_cast<float>(renderVoice(v) * v.envLevel);
+                float m = static_cast<float>(renderVoice(v) * v.envLevel);
+                for (int fxIndex = 0; fxIndex < kFxSlots; ++fxIndex) {
+                    m = processFxSample(pIdx, fxIndex, m);
+                }
                 mixL += m * gl;
                 mixR += m * gr;
 
