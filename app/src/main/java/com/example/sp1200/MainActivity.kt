@@ -23,6 +23,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -57,6 +58,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -91,6 +93,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.launch
 
 private val thBg = mutableStateOf(Color(0xFF0F1418))
 private val thCy = mutableStateOf(Color(0xFF29C5F6))
@@ -2721,6 +2724,63 @@ fun MixView(
     }
 }
 
+
+private enum class ScrollbarOrientation { Horizontal, Vertical }
+
+@Composable
+private fun EditorScrollbar(
+    state: ScrollState,
+    orientation: ScrollbarOrientation,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val trackColor = Color(0xFF111A20)
+    val thumbColor = Color(0xFF29C5F6)
+    Canvas(
+        modifier = modifier
+            .clip(RoundedCornerShape(5.dp))
+            .background(trackColor)
+            .pointerInput(state, orientation) {
+                detectDragGestures { change, drag ->
+                    change.consume()
+                    val trackPx = if (orientation == ScrollbarOrientation.Horizontal) size.width.toFloat() else size.height.toFloat()
+                    val viewport = state.viewportSize.toFloat()
+                    val maxScroll = state.maxValue.toFloat()
+                    if (trackPx > 0f && viewport > 0f && maxScroll > 0f) {
+                        val thumbPx = (trackPx * viewport / (viewport + maxScroll)).coerceIn(18f, trackPx)
+                        val travelPx = (trackPx - thumbPx).coerceAtLeast(1f)
+                        val deltaPx = if (orientation == ScrollbarOrientation.Horizontal) drag.x else drag.y
+                        val deltaScroll = deltaPx * maxScroll / travelPx
+                        scope.launch {
+                            state.scrollTo((state.value + deltaScroll).toInt().coerceIn(0, state.maxValue))
+                        }
+                    }
+                }
+            }
+    ) {
+        val trackPx = if (orientation == ScrollbarOrientation.Horizontal) size.width else size.height
+        val viewport = state.viewportSize.toFloat()
+        val maxScroll = state.maxValue.toFloat()
+        val thumbPx = if (maxScroll <= 0f || viewport <= 0f) trackPx else (trackPx * viewport / (viewport + maxScroll)).coerceIn(18f, trackPx)
+        val offset = if (maxScroll <= 0f || trackPx <= thumbPx) 0f else (trackPx - thumbPx) * state.value / maxScroll
+        if (orientation == ScrollbarOrientation.Horizontal) {
+            drawRoundRect(
+                color = thumbColor,
+                topLeft = Offset(offset, 1f),
+                size = Size(thumbPx, (size.height - 2f).coerceAtLeast(1f)),
+                cornerRadius = CornerRadius(4f)
+            )
+        } else {
+            drawRoundRect(
+                color = thumbColor,
+                topLeft = Offset(1f, offset),
+                size = Size((size.width - 2f).coerceAtLeast(1f), thumbPx),
+                cornerRadius = CornerRadius(4f)
+            )
+        }
+    }
+}
+
 @Composable
 fun SequencerGrid(
     pattern: List<Int>,
@@ -2734,18 +2794,26 @@ fun SequencerGrid(
     playhead: Int,
     playing: Boolean
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        for (pad in 0 until 16) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+    val seqScrollX = rememberScrollState()
+    val seqScrollY = rememberScrollState()
+    val seqStepWidth = 44.dp
+    val seqContentWidth = 44.dp + seqStepWidth * 16
+    val seqBarSize = 10.dp
+    Box(modifier = Modifier.fillMaxWidth().height(300.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(end = seqBarSize, bottom = seqBarSize)
+                .horizontalScroll(seqScrollX)
+                .verticalScroll(seqScrollY),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            for (pad in 0 until 16) {
+                Row(
+                    modifier = Modifier.width(seqContentWidth),
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                 Box(
                     modifier = Modifier.width(22.dp).height(24.dp)
                         .clip(RoundedCornerShape(4.dp))
@@ -2769,7 +2837,7 @@ fun SequencerGrid(
                         else -> C_DARK
                     }
                     Box(
-                        modifier = Modifier.weight(1f).height(24.dp)
+                        modifier = Modifier.width(seqStepWidth).height(24.dp)
                             .clip(RoundedCornerShape(4.dp))
                             .background(
                                 if (on) C_PINK.copy(alpha = (0.3f + 0.7f * vel / 150f)) else offColor
@@ -2787,8 +2855,19 @@ fun SequencerGrid(
                             }
                     )
                 }
+                }
             }
         }
+        EditorScrollbar(
+            state = seqScrollY,
+            orientation = ScrollbarOrientation.Vertical,
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(seqBarSize)
+        )
+        EditorScrollbar(
+            state = seqScrollX,
+            orientation = ScrollbarOrientation.Horizontal,
+            modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth().height(seqBarSize).padding(end = seqBarSize)
+        )
     }
 }
 
@@ -2937,7 +3016,8 @@ fun RollView(
             val rowHeight = (25.dp * zoom).coerceIn(14.dp, 90.dp)
             val headerHeight = (22.dp * zoom).coerceIn(16.dp, 72.dp)
             val timelineWidth = maxOf(900.dp, maxWidth - keyWidth) * zoom
-            Row(modifier = Modifier.fillMaxSize().verticalScroll(scrollY)) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Row(modifier = Modifier.fillMaxSize().padding(end = 10.dp, bottom = 10.dp).verticalScroll(scrollY)) {
                 Column(modifier = Modifier.width(keyWidth)) {
                     Box(modifier = Modifier.fillMaxWidth().height(headerHeight), contentAlignment = Alignment.Center) {
                         Text("KEY", color = Color(0xFF9BB7C4), fontSize = 8.sp)
@@ -3081,6 +3161,16 @@ fun RollView(
                         }
                     }
                 }
+                EditorScrollbar(
+                    state = scrollY,
+                    orientation = ScrollbarOrientation.Vertical,
+                    modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(10.dp)
+                )
+                EditorScrollbar(
+                    state = scrollX,
+                    orientation = ScrollbarOrientation.Horizontal,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(start = keyWidth, end = 10.dp).fillMaxWidth().height(10.dp)
+                )
             }
         }
     }
