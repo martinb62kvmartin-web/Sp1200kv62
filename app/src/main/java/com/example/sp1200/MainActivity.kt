@@ -3161,6 +3161,7 @@ fun RollView(
                         }
                     }
                 }
+                }
                 EditorScrollbar(
                     state = scrollY,
                     orientation = ScrollbarOrientation.Vertical,
