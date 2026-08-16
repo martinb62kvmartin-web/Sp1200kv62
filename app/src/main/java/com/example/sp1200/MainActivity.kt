@@ -1384,7 +1384,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         },
-                        onResizeDelta = { pad, st, d ->
+                        onResizeTo = { pad, st, d ->
                             if (st in 0 until ROLL_STEPS) {
                                 val cur = rollLenBanks[bank][pad][st]
                                 val next = (cur + d).coerceIn(1, (ROLL_STEPS - st) * 4)
@@ -2044,7 +2044,7 @@ fun Sp1200App(
     onToggleStep: (Int, Int) -> Unit,
     vels: List<List<Int>>,
     onVel: (Int, Int, Float) -> Unit,
-    onResizeDelta: (Int, Int, Int) -> Unit,
+    onResizeTo: (Int, Int, Int) -> Unit,
     onDeleteRoll: (Int, Int) -> Unit,
     onDeleteNote: (Int, Int, Int) -> Unit,
     onMoveNote: (Int, Int, Int, Int, Int) -> Unit,
@@ -2185,7 +2185,7 @@ fun Sp1200App(
                 noteLen = noteLen,
                 onNoteLenCycle = onNoteLenCycle,
                 onToggleRollCell = onToggleRollCell,
-                onResizeDelta = onResizeDelta,
+                onResizeTo = onResizeTo,
                 onVel = onVel,
                 onDeleteRoll = onDeleteRoll,
                 onDeleteNote = onDeleteNote,
@@ -2825,7 +2825,7 @@ fun RollView(
     noteLen: Int,
     onNoteLenCycle: () -> Unit,
     onToggleRollCell: (Int, Int, Int) -> Unit,
-    onResizeDelta: (Int, Int, Int) -> Unit,
+    onResizeTo: (Int, Int, Int) -> Unit,
     onVel: (Int, Int, Float) -> Unit,
     onDeleteRoll: (Int, Int) -> Unit,
     onDeleteNote: (Int, Int, Int) -> Unit,
@@ -2852,6 +2852,8 @@ fun RollView(
     val currentRow = roll[selectedPad]
     val currentLens = rollLens[selectedPad]
     val currentVels = vels[selectedPad]
+    val latestRow = rememberUpdatedState(currentRow)
+    val latestLens = rememberUpdatedState(currentLens)
     val noteColor = C_PINK
     val noteCount = currentRow.sumOf { Integer.bitCount(it) }
 
@@ -2881,9 +2883,9 @@ fun RollView(
             KBtn("RESIZE", tool == RollTool.RESIZE, { tool = RollTool.RESIZE }, Modifier.width(62.dp).height(30.dp))
             KBtn("LEN $noteLen", false, onNoteLenCycle, Modifier.width(62.dp).height(30.dp))
             KBtn("SNAP ${snap * 4}", false, { snap = if (snap == 1) 2 else if (snap == 2) 4 else 1 }, Modifier.width(72.dp).height(30.dp))
-            KBtn("−", false, { zoom = (zoom - 0.25f).coerceAtLeast(0.75f) }, Modifier.width(34.dp).height(30.dp))
+            KBtn("−", false, { zoom = (zoom - 0.25f).coerceAtLeast(0.5f) }, Modifier.width(34.dp).height(30.dp))
             KBtn("${(zoom * 100).toInt()}%", false, { zoom = 1f }, Modifier.width(58.dp).height(30.dp))
-            KBtn("+", false, { zoom = (zoom + 0.25f).coerceAtMost(2.5f) }, Modifier.width(34.dp).height(30.dp))
+            KBtn("+", false, { zoom = (zoom + 0.25f).coerceAtMost(4f) }, Modifier.width(34.dp).height(30.dp))
         }
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             KBtn("UNDO", false, onUndo, Modifier.width(56.dp).height(28.dp))
@@ -2924,25 +2926,33 @@ fun RollView(
             color = Color(0xFF9BB7C4), fontSize = 9.sp, maxLines = 1
         )
 
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().weight(1f)) {
-            val keyWidth = 46.dp
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().weight(1f).pointerInput(Unit) {
+                detectTransformGestures(panZoomLock = false) { _, _, zoomChange, _ ->
+                    zoom = (zoom * zoomChange).coerceIn(0.5f, 4f)
+                }
+            }
+        ) {
+            val keyWidth = (46.dp * zoom).coerceIn(32.dp, 120.dp)
+            val rowHeight = (25.dp * zoom).coerceIn(14.dp, 90.dp)
+            val headerHeight = (22.dp * zoom).coerceIn(16.dp, 72.dp)
             val timelineWidth = maxOf(900.dp, maxWidth - keyWidth) * zoom
             Row(modifier = Modifier.fillMaxSize().verticalScroll(scrollY)) {
                 Column(modifier = Modifier.width(keyWidth)) {
-                    Box(modifier = Modifier.fillMaxWidth().height(22.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxWidth().height(headerHeight), contentAlignment = Alignment.Center) {
                         Text("KEY", color = Color(0xFF9BB7C4), fontSize = 8.sp)
                     }
                     for (pitch in (ROLL_PITCHES - 1) downTo 0) {
                         val black = pitchName(pitch).contains("#")
                         Box(
-                            modifier = Modifier.fillMaxWidth().height(25.dp).clip(RoundedCornerShape(2.dp)).background(if (black) Color(0xFF171021) else Color(0xFFE8F4F8)).clickable { onAudition(selectedPad, pitch - 12) },
+                            modifier = Modifier.fillMaxWidth().height(rowHeight).clip(RoundedCornerShape(2.dp)).background(if (black) Color(0xFF171021) else Color(0xFFE8F4F8)).clickable { onAudition(selectedPad, pitch - 12) },
                             contentAlignment = Alignment.Center
                         ) { Text(pitchName(pitch), color = if (black) Color.White else Color.Black, fontSize = 7.sp) }
                     }
                 }
 
                 Column(modifier = Modifier.weight(1f).horizontalScroll(scrollX)) {
-                    Canvas(modifier = Modifier.width(timelineWidth).fillMaxWidth().height(22.dp)) {
+                    Canvas(modifier = Modifier.width(timelineWidth).fillMaxWidth().height(headerHeight)) {
                         val cellW = size.width / ROLL_STEPS
                         for (step in 0 until ROLL_STEPS) {
                             val strong = step % 16 == 0
@@ -2955,13 +2965,15 @@ fun RollView(
                         val rowIndex = ROLL_PITCHES - 1 - pitch
                         val black = pitchName(pitch).contains("#")
                         Canvas(
-                            modifier = Modifier.width(timelineWidth).height(25.dp).pointerInput(currentRow, currentLens, tool, snap) {
+                            modifier = Modifier.width(timelineWidth).height(rowHeight).pointerInput(latestRow.value, latestLens.value, tool, snap) {
                                 detectTapGestures(
                                     onTap = { pos ->
+                                        val row = latestRow.value
+                                        val lens = latestLens.value
                                         val cellW = size.width / ROLL_STEPS
                                         val rawStep = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
                                         val step = ((rawStep + snap / 2) / snap * snap).coerceIn(0, ROLL_STEPS - 1)
-                                        val start = rollNoteStart(currentRow, currentLens, rawStep, pitch)
+                                        val start = rollNoteStart(row, lens, rawStep, pitch)
                                         when (tool) {
                                             RollTool.DRAW -> onToggleRollCell(selectedPad, if (start >= 0) start else step, pitch)
                                             RollTool.ERASE -> if (start >= 0) onDeleteNote(selectedPad, start, pitch)
@@ -2969,51 +2981,74 @@ fun RollView(
                                         }
                                     },
                                     onLongPress = { pos ->
+                                        val row = latestRow.value
+                                        val lens = latestLens.value
                                         val cellW = size.width / ROLL_STEPS
                                         val step = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
-                                        val start = rollNoteStart(currentRow, currentLens, step, pitch)
+                                        val start = rollNoteStart(row, lens, step, pitch)
                                         if (start >= 0) onDeleteNote(selectedPad, start, pitch)
                                     }
                                 )
-                            }.pointerInput(currentRow, currentLens, tool, snap) {
+                            }.pointerInput(tool, snap, selectedPad) {
                                 var from: RollPoint? = null
+                                var resizeFrom: RollPoint? = null
+                                var resizeStartLen = 0
+                                var resizeLastLen = -1
+                                var dragAccumX = 0f
                                 var lastStep = -1
                                 detectDragGestures(
                                     onDragStart = { pos ->
+                                        val row = latestRow.value
+                                        val lens = latestLens.value
                                         val cellW = size.width / ROLL_STEPS
-                                        val step = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
-                                        val start = rollNoteStart(currentRow, currentLens, step, pitch)
-                                        from = if (start >= 0) RollPoint(start, pitch) else null
-                                        lastStep = step
+                                        val rawStep = (pos.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                        val start = rollNoteStart(row, lens, rawStep, pitch)
+                                        val noteLength = if (start >= 0) lens[start].coerceAtLeast(1) else 0
+                                        val noteRight = if (start >= 0) (start + noteLength / 4f) * cellW else 0f
+                                        val edgeHit = start >= 0 && pos.x >= noteRight - maxOf(8f, cellW * 0.45f)
+                                        resizeFrom = if (start >= 0 && tool != RollTool.ERASE && (tool == RollTool.RESIZE || edgeHit)) RollPoint(start, pitch) else null
+                                        resizeStartLen = noteLength
+                                        resizeLastLen = noteLength
+                                        dragAccumX = 0f
+                                        from = if (resizeFrom == null && start >= 0) RollPoint(start, pitch) else null
+                                        lastStep = rawStep
                                     },
-                                    onDragEnd = { from = null },
-                                    onDragCancel = { from = null },
+                                    onDragEnd = { from = null; resizeFrom = null },
+                                    onDragCancel = { from = null; resizeFrom = null },
                                     onDrag = { change, drag ->
                                         change.consume()
-                                        val cellW = size.width / ROLL_STEPS
-                                        val step = (change.position.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
-                                        val source = from
-                                        if (source != null && step != lastStep) {
-                                            when (tool) {
-                                                RollTool.SELECT -> {
-                                                    val delta = step - source.step
-                                                    val pitchDelta = ((-drag.y / 25f).toInt()).coerceIn(-ROLL_PITCHES, ROLL_PITCHES)
-                                                    val destination = (source.pitch + pitchDelta).coerceIn(0, ROLL_PITCHES - 1)
-                                                    val snappedStep = (source.step + delta).coerceIn(0, ROLL_STEPS - 1)
-                                                    onMoveNote(selectedPad, source.step, source.pitch, snappedStep, destination)
-                                                    selectedNotes = setOf(RollPoint(snappedStep, destination))
-                                                    from = RollPoint(snappedStep, destination)
-                                                }
-                                                RollTool.RESIZE -> onResizeDelta(selectedPad, source.step, ((drag.x / cellW) * 4f).toInt())
-                                                RollTool.VELOCITY -> onVel(selectedPad, source.step, -drag.y / 2f)
-                                                else -> Unit
+                                        val resize = resizeFrom
+                                        if (resize != null) {
+                                            dragAccumX += drag.x
+                                            val cellW = size.width / ROLL_STEPS
+                                            val targetLen = (resizeStartLen + (dragAccumX / cellW * 4f).toInt()).coerceIn(1, (ROLL_STEPS - resize.step) * 4)
+                                            if (targetLen != resizeLastLen) {
+                                                onResizeTo(selectedPad, resize.step, targetLen)
+                                                resizeLastLen = targetLen
                                             }
-                                            lastStep = step
-                                        } else if (source != null) {
-                                            when (tool) {
-                                                RollTool.RESIZE -> onResizeDelta(selectedPad, source.step, ((drag.x / cellW) * 4f).toInt())
-                                                RollTool.VELOCITY -> onVel(selectedPad, source.step, -drag.y / 2f)
-                                                else -> Unit
+                                        } else {
+                                            val source = from
+                                            if (source != null) {
+                                                val cellW = size.width / ROLL_STEPS
+                                                val step = (change.position.x / cellW).toInt().coerceIn(0, ROLL_STEPS - 1)
+                                                if (source != null && step != lastStep) {
+                                                    when (tool) {
+                                                        RollTool.SELECT -> {
+                                                            val delta = step - source.step
+                                                            val pitchDelta = ((-drag.y / 25f).toInt()).coerceIn(-ROLL_PITCHES, ROLL_PITCHES)
+                                                            val destination = (source.pitch + pitchDelta).coerceIn(0, ROLL_PITCHES - 1)
+                                                            val snappedStep = (source.step + delta).coerceIn(0, ROLL_STEPS - 1)
+                                                            onMoveNote(selectedPad, source.step, source.pitch, snappedStep, destination)
+                                                            selectedNotes = setOf(RollPoint(snappedStep, destination))
+                                                            from = RollPoint(snappedStep, destination)
+                                                        }
+                                                        RollTool.VELOCITY -> onVel(selectedPad, source.step, -drag.y / 2f)
+                                                        else -> Unit
+                                                    }
+                                                    lastStep = step
+                                                } else if (tool == RollTool.VELOCITY) {
+                                                    onVel(selectedPad, source.step, -drag.y / 2f)
+                                                }
                                             }
                                         }
                                     }
